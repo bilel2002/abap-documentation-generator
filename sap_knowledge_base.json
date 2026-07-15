@@ -1,0 +1,874 @@
+{
+  "version": "1.0",
+  "last_updated": "2026-07-02",
+  "tables": {
+    "EKKO": {
+      "purpose": "Purchase Order Header",
+      "description": "Contains header data for purchase orders including vendor, purchasing organization, and company code",
+      "key_fields": ["EBELN"],
+      "fields": {
+        "EBELN": {
+          "data_element": "EBELN",
+          "domain": "EBELN",
+          "description": "Purchase Order Number",
+          "purpose": "Unique identifier for the purchase order",
+          "category": "KEY",
+          "check_table": null
+        },
+        "BUKRS": {
+          "data_element": "BUKRS",
+          "domain": "BUKRS",
+          "description": "Company Code",
+          "purpose": "Identifies the company/organization unit",
+          "category": "ORGANIZATIONAL",
+          "check_table": "T001"
+        },
+        "LIFNR": {
+          "data_element": "ELIFN",
+          "domain": "LIFNR",
+          "description": "Vendor Account Number",
+          "purpose": "Unique identifier for the vendor/supplier",
+          "category": "VENDOR",
+          "check_table": "LFA1"
+        },
+        "EKORG": {
+          "data_element": "EKORG",
+          "domain": "EKORG",
+          "description": "Purchasing Organization",
+          "purpose": "Organizational unit responsible for purchasing",
+          "category": "ORGANIZATIONAL",
+          "check_table": "T024E"
+        },
+        "EKGRP": {
+          "data_element": "EKGRP",
+          "domain": "EKGRP",
+          "description": "Purchasing Group",
+          "purpose": "Group responsible for purchasing activities",
+          "category": "ORGANIZATIONAL",
+          "check_table": "T024"
+        },
+        "ERNAM": {
+          "data_element": "ERNAM",
+          "domain": "USNAM",
+          "description": "Created By",
+          "purpose": "User who created the purchase order",
+          "category": "USER",
+          "check_table": null
+        },
+        "ADRNR": {
+          "data_element": "AD_ADDRNUM",
+          "domain": "AD_ADDRNUM",
+          "description": "Address Number",
+          "purpose": "Link to address data in ADRC table",
+          "category": "ADDRESS",
+          "check_table": "ADRC"
+        }
+      },
+      "related_tables": ["EKPO", "LFA1", "T001"],
+      "in_this_program": "Provides purchase order header data for quality notification creation"
+    },
+    "EKPO": {
+      "purpose": "Purchase Order Item",
+      "description": "Contains item-level data for purchase orders including material, quantity, and price",
+      "key_fields": ["EBELN", "EBELP"],
+      "fields": {
+        "EBELN": {
+          "data_element": "EBELN",
+          "domain": "EBELN",
+          "description": "Purchase Order Number",
+          "purpose": "Reference to the purchase order header",
+          "category": "KEY",
+          "check_table": "EKKO"
+        },
+        "EBELP": {
+          "data_element": "EBELP",
+          "domain": "EBELP",
+          "description": "Purchase Order Item Number",
+          "purpose": "Unique identifier for an item within a purchase order",
+          "category": "KEY",
+          "check_table": null
+        },
+        "MATNR": {
+          "data_element": "MATNR",
+          "domain": "MATNR",
+          "description": "Material Number",
+          "purpose": "Unique identifier for the material/product",
+          "category": "MATERIAL",
+          "check_table": "MARA"
+        },
+        "WERKS": {
+          "data_element": "WERKS_D",
+          "domain": "WERKS",
+          "description": "Plant",
+          "purpose": "Plant/delivering location for the material",
+          "category": "ORGANIZATIONAL",
+          "check_table": "T001W"
+        },
+        "ATTYP": {
+          "data_element": "ATTYP",
+          "domain": "ATTYP",
+          "description": "Material Category",
+          "purpose": "Category of material (e.g., '02' = variant)",
+          "category": "MATERIAL",
+          "check_table": null
+        },
+        "LOEKZ": {
+          "data_element": "LOEKZ",
+          "domain": "LOEKZ",
+          "description": "Deletion Indicator",
+          "purpose": "Marks if the item is deleted",
+          "category": "STATUS",
+          "check_table": null
+        },
+        "TXZ01": {
+          "data_element": "TXZ01",
+          "domain": "TXT40",
+          "description": "Short Text",
+          "purpose": "Short description of the item",
+          "category": "DESCRIPTION",
+          "check_table": null
+        }
+      },
+      "related_tables": ["EKKO", "MARA"],
+      "in_this_program": "Provides item data to process each material for quality notifications"
+    },
+    "LFA1": {
+      "purpose": "Vendor Master (General Data)",
+      "description": "Contains general vendor master data including name, address, and communication information",
+      "key_fields": ["LIFNR"],
+      "fields": {
+        "LIFNR": {
+          "data_element": "ELIFN",
+          "domain": "LIFNR",
+          "description": "Vendor Account Number",
+          "purpose": "Unique identifier for the vendor/supplier",
+          "category": "KEY",
+          "check_table": null
+        },
+        "ADRNR": {
+          "data_element": "AD_ADDRNUM",
+          "domain": "AD_ADDRNUM",
+          "description": "Address Number",
+          "purpose": "Link to address data in ADRC table",
+          "category": "ADDRESS",
+          "check_table": "ADRC"
+        },
+        "NAME1": {
+          "data_element": "NAME1_GP",
+          "domain": "NAME",
+          "description": "Vendor Name",
+          "purpose": "Name of the vendor/supplier",
+          "category": "VENDOR",
+          "check_table": null
+        },
+        "LAND1": {
+          "data_element": "LAND1_GP",
+          "domain": "LAND1",
+          "description": "Country Key",
+          "purpose": "Country of the vendor",
+          "category": "ADDRESS",
+          "check_table": "T005"
+        }
+      },
+      "related_tables": ["LFM1", "ADR6", "ADRC"],
+      "wrong_descriptions": ["Customer Master"],
+      "in_this_program": "Provides vendor address number for email retrieval"
+    },
+    "LFM1": {
+      "purpose": "Vendor Master (Purchasing Data)",
+      "description": "Contains vendor-specific purchasing data including pricing procedure, currency, and terms",
+      "key_fields": ["LIFNR", "EKORG"],
+      "fields": {
+        "LIFNR": {
+          "data_element": "ELIFN",
+          "domain": "LIFNR",
+          "description": "Vendor Account Number",
+          "purpose": "Unique identifier for the vendor/supplier",
+          "category": "KEY",
+          "check_table": "LFA1"
+        },
+        "EKORG": {
+          "data_element": "EKORG",
+          "domain": "EKORG",
+          "description": "Purchasing Organization",
+          "purpose": "Organizational unit responsible for purchasing",
+          "category": "KEY",
+          "check_table": "T024E"
+        },
+        "KALSK": {
+          "data_element": "KALSK",
+          "domain": "KALSK",
+          "description": "Group for Calculation Schema (Vendor)",
+          "purpose": "Determines the pricing procedure for this vendor in the purchasing organization",
+          "category": "PRICING",
+          "check_table": "TMKK",
+          "not_to_confuse_with": ["color characteristic", "customer group", "color group"],
+          "common_values": ["Z4", "Z5", "STANDARD"]
+        },
+        "WAERS": {
+          "data_element": "BSTWA",
+          "domain": "WAERS",
+          "description": "Purchase Order Currency",
+          "purpose": "Currency used for purchase orders with this vendor",
+          "category": "CURRENCY",
+          "check_table": "TCURC"
+        },
+        "INCO1": {
+          "data_element": "INCO1",
+          "domain": "INCO1",
+          "description": "Incoterms Part 1",
+          "purpose": "International commercial terms (e.g., FOB, CIF)",
+          "category": "TERMS",
+          "check_table": "TINC"
+        }
+      },
+      "related_tables": ["LFA1", "T024E", "TMKK"],
+      "wrong_descriptions": ["Customer Purchasing Data"],
+      "in_this_program": "Provides KALSK (pricing procedure) for the vendor"
+    },
+    "CAWN": {
+      "purpose": "Characteristic Values",
+      "description": "Contains characteristic values (e.g., color codes like '01' for White)",
+      "key_fields": ["ATINN", "ATZHL", "ATWRT"],
+      "fields": {
+        "ATINN": {
+          "data_element": "ATINN",
+          "domain": "ATINN",
+          "description": "Internal Characteristic Number",
+          "purpose": "Unique identifier for a characteristic",
+          "category": "KEY",
+          "check_table": "CABN"
+        },
+        "ATZHL": {
+          "data_element": "ATZHL",
+          "domain": "ATZHL",
+          "description": "Characteristic Value Counter",
+          "purpose": "Counter for multiple values of the same characteristic",
+          "category": "KEY",
+          "check_table": null
+        },
+        "ATWRT": {
+          "data_element": "ATWRT",
+          "domain": "ATWRT",
+          "description": "Characteristic Value",
+          "purpose": "Stores characteristic values (e.g., color codes like '01' for White)",
+          "category": "CHARACTERISTIC",
+          "check_table": null
+        }
+      },
+      "related_tables": ["CAWNT", "CABN"],
+      "wrong_descriptions": ["Work Center"],
+      "in_this_program": "Provides color characteristic values"
+    },
+    "CAWNT": {
+      "purpose": "Characteristic Value Descriptions",
+      "description": "Contains descriptions for characteristic values in multiple languages",
+      "key_fields": ["ATINN", "ATZHL", "SPRAS", "ATWTB"],
+      "fields": {
+        "ATINN": {
+          "data_element": "ATINN",
+          "domain": "ATINN",
+          "description": "Internal Characteristic Number",
+          "purpose": "Unique identifier for a characteristic",
+          "category": "KEY",
+          "check_table": "CABN"
+        },
+        "ATZHL": {
+          "data_element": "ATZHL",
+          "domain": "ATZHL",
+          "description": "Characteristic Value Counter",
+          "purpose": "Counter for multiple values of the same characteristic",
+          "category": "KEY",
+          "check_table": null
+        },
+        "SPRAS": {
+          "data_element": "SPRAS",
+          "domain": "SPRAS",
+          "description": "Language Key",
+          "purpose": "Language for the description",
+          "category": "LANGUAGE",
+          "check_table": "T002"
+        },
+        "ATWTB": {
+          "data_element": "ATWTB",
+          "domain": "ATWTB",
+          "description": "Characteristic Value Description",
+          "purpose": "Description of the characteristic value (e.g., 'White' for color '01')",
+          "category": "CHARACTERISTIC",
+          "check_table": null
+        }
+      },
+      "related_tables": ["CAWN", "CABN"],
+      "wrong_descriptions": ["Work Center Text"],
+      "in_this_program": "Provides color descriptions (e.g., 'White' for color '01')"
+    },
+    "QMEL": {
+      "purpose": "Quality Notification Header",
+      "description": "Contains header data for quality notifications including material, vendor, and purchase order reference",
+      "key_fields": ["QMNUM"],
+      "fields": {
+        "QMNUM": {
+          "data_element": "QMNUM",
+          "domain": "QMNUM",
+          "description": "Quality Notification Number",
+          "purpose": "Unique identifier for a quality notification",
+          "category": "KEY",
+          "check_table": null
+        },
+        "QMART": {
+          "data_element": "QMART",
+          "domain": "QMART",
+          "description": "Notification Type",
+          "purpose": "Type of quality notification (e.g., 'Z4' for product conformity)",
+          "category": "TYPE",
+          "check_table": "TQ80"
+        },
+        "MATNR": {
+          "data_element": "MATNR",
+          "domain": "MATNR",
+          "description": "Material Number",
+          "purpose": "Material concerned by the notification",
+          "category": "MATERIAL",
+          "check_table": "MARA"
+        },
+        "LIFNUM": {
+          "data_element": "LIFNR",
+          "domain": "LIFNR",
+          "description": "Vendor Number",
+          "purpose": "Vendor associated with the notification",
+          "category": "VENDOR",
+          "check_table": "LFA1"
+        },
+        "EBELN": {
+          "data_element": "EBELN",
+          "domain": "EBELN",
+          "description": "Purchase Order Number",
+          "purpose": "Purchase order reference for the notification",
+          "category": "PURCHASING",
+          "check_table": "EKKO"
+        },
+        "EBELP": {
+          "data_element": "EBELP",
+          "domain": "EBELP",
+          "description": "Purchase Order Item Number",
+          "purpose": "Purchase order item reference",
+          "category": "PURCHASING",
+          "check_table": "EKPO"
+        },
+        "EKORG": {
+          "data_element": "EKORG",
+          "domain": "EKORG",
+          "description": "Purchasing Organization",
+          "purpose": "Purchasing organization responsible",
+          "category": "ORGANIZATIONAL",
+          "check_table": "T024E"
+        },
+        "BKGRP": {
+          "data_element": "BKGRP",
+          "domain": "BKGRP",
+          "description": "Purchasing Group",
+          "purpose": "Purchasing group responsible",
+          "category": "ORGANIZATIONAL",
+          "check_table": "T024"
+        }
+      },
+      "related_tables": ["QMMA", "EKKO", "EKPO", "LFA1"],
+      "wrong_descriptions": ["CFP", "Inspection Lots", "Qualification Management"],
+      "in_this_program": "Stores quality notifications (avis) for the supplier and purchase order"
+    },
+    "QMMA": {
+      "purpose": "Quality Notification Activities",
+      "description": "Contains activities/actions associated with a quality notification",
+      "key_fields": ["QMNUM", "MANUM"],
+      "fields": {
+        "QMNUM": {
+          "data_element": "QMNUM",
+          "domain": "QMNUM",
+          "description": "Quality Notification Number",
+          "purpose": "Reference to the quality notification",
+          "category": "KEY",
+          "check_table": "QMEL"
+        },
+        "MANUM": {
+          "data_element": "MANUM",
+          "domain": "MANUM",
+          "description": "Activity Number",
+          "purpose": "Unique identifier for an activity within a notification",
+          "category": "KEY",
+          "check_table": null
+        },
+        "QMANUM": {
+          "data_element": "QMANUM",
+          "domain": "QMANUM",
+          "description": "Activity Sequence Number",
+          "purpose": "Sequence number for ordering activities",
+          "category": "SEQUENCE",
+          "check_table": null
+        }
+      },
+      "related_tables": ["QMEL"],
+      "wrong_descriptions": ["Activation Management", "Inspection Lot Assignments"],
+      "in_this_program": "Stores activities for each quality notification (including 'Relance' follow-up)"
+    },
+    "ADR6": {
+      "purpose": "Email Addresses",
+      "description": "Contains email addresses linked to SAP objects via address numbers",
+      "key_fields": ["ADDRNUMBER", "SMTP_ADDR"],
+      "fields": {
+        "ADDRNUMBER": {
+          "data_element": "AD_ADDRNUM",
+          "domain": "AD_ADDRNUM",
+          "description": "Address Number",
+          "purpose": "Link to the address object",
+          "category": "KEY",
+          "check_table": "ADRC"
+        },
+        "SMTP_ADDR": {
+          "data_element": "AD_SMTPADR",
+          "domain": "AD_SMTPADR",
+          "description": "E-Mail Address",
+          "purpose": "The actual email address",
+          "category": "COMMUNICATION",
+          "check_table": null
+        },
+        "FLGDEFAULT": {
+          "data_element": "AD_FLGDFLT",
+          "domain": "XFELD",
+          "description": "Default Flag",
+          "purpose": "Indicates if this is the default email address",
+          "category": "FLAG",
+          "check_table": null
+        }
+      },
+      "related_tables": ["ADRC"],
+      "wrong_descriptions": ["Physical Addresses"],
+      "in_this_program": "Provides supplier email address for sending notifications"
+    },
+    "ADRC": {
+      "purpose": "Physical Addresses (Central Address Management)",
+      "description": "Contains physical address data for all SAP objects",
+      "key_fields": ["ADDRNUMBER"],
+      "fields": {
+        "ADDRNUMBER": {
+          "data_element": "AD_ADDRNUM",
+          "domain": "AD_ADDRNUM",
+          "description": "Address Number",
+          "purpose": "Unique identifier for the address",
+          "category": "KEY",
+          "check_table": null
+        },
+        "NAME1": {
+          "data_element": "AD_NAME1",
+          "domain": "TEXT40",
+          "description": "Name 1",
+          "purpose": "First name line (usually company name)",
+          "category": "ADDRESS",
+          "check_table": null
+        },
+        "NAME4": {
+          "data_element": "AD_NAME4",
+          "domain": "TEXT40",
+          "description": "Name 4",
+          "purpose": "Additional name information",
+          "category": "ADDRESS",
+          "check_table": null
+        },
+        "STREET": {
+          "data_element": "AD_STREET",
+          "domain": "TEXT60",
+          "description": "Street",
+          "purpose": "Street name and number",
+          "category": "ADDRESS",
+          "check_table": null
+        },
+        "CITY1": {
+          "data_element": "AD_CITY1",
+          "domain": "TEXT40",
+          "description": "City",
+          "purpose": "City name",
+          "category": "ADDRESS",
+          "check_table": null
+        },
+        "POST_CODE1": {
+          "data_element": "AD_PSTCD1",
+          "domain": "CHAR10",
+          "description": "Postal Code",
+          "purpose": "Postal/ZIP code",
+          "category": "ADDRESS",
+          "check_table": null
+        },
+        "COUNTRY": {
+          "data_element": "LAND1",
+          "domain": "LAND1",
+          "description": "Country Key",
+          "purpose": "Country code",
+          "category": "ADDRESS",
+          "check_table": "T005"
+        }
+      },
+      "related_tables": ["ADR6", "T005"],
+      "wrong_descriptions": ["Email Addresses"],
+      "in_this_program": "Provides company address appended to email"
+    },
+    "T001": {
+      "purpose": "Company Codes",
+      "description": "Contains company code master data",
+      "key_fields": ["BUKRS"],
+      "fields": {
+        "BUKRS": {
+          "data_element": "BUKRS",
+          "domain": "BUKRS",
+          "description": "Company Code",
+          "purpose": "Unique identifier for the company code",
+          "category": "KEY",
+          "check_table": null
+        },
+        "ADRNR": {
+          "data_element": "AD_ADDRNUM",
+          "domain": "AD_ADDRNUM",
+          "description": "Address Number",
+          "purpose": "Link to company address in ADRC",
+          "category": "ADDRESS",
+          "check_table": "ADRC"
+        },
+        "LAND1": {
+          "data_element": "LAND1",
+          "domain": "LAND1",
+          "description": "Country Key",
+          "purpose": "Country of the company code",
+          "category": "ADDRESS",
+          "check_table": "T005"
+        },
+        "WAERS": {
+          "data_element": "WAERS",
+          "domain": "WAERS",
+          "description": "Currency",
+          "purpose": "Local currency of the company code",
+          "category": "CURRENCY",
+          "check_table": "TCURC"
+        }
+      },
+      "related_tables": ["ADRC", "T005"],
+      "wrong_descriptions": ["Purchasing Organizations"],
+      "in_this_program": "Provides company address for email sender"
+    },
+    "MAKT": {
+      "purpose": "Material Descriptions",
+      "description": "Contains material descriptions in multiple languages",
+      "key_fields": ["MATNR", "SPRAS"],
+      "fields": {
+        "MATNR": {
+          "data_element": "MATNR",
+          "domain": "MATNR",
+          "description": "Material Number",
+          "purpose": "Unique identifier for the material",
+          "category": "KEY",
+          "check_table": "MARA"
+        },
+        "SPRAS": {
+          "data_element": "SPRAS",
+          "domain": "SPRAS",
+          "description": "Language Key",
+          "purpose": "Language for the description",
+          "category": "KEY",
+          "check_table": "T002"
+        },
+        "MAKTX": {
+          "data_element": "MAKTX",
+          "domain": "TEXT40",
+          "description": "Material Description",
+          "purpose": "Short description of the material",
+          "category": "DESCRIPTION",
+          "check_table": null
+        }
+      },
+      "related_tables": ["MARA"],
+      "wrong_descriptions": ["Material Master"],
+      "in_this_program": "Provides material description for email content"
+    },
+    "T024E": {
+      "purpose": "Purchasing Organizations",
+      "description": "Contains purchasing organization master data",
+      "key_fields": ["EKORG"],
+      "fields": {
+        "EKORG": {
+          "data_element": "EKORG",
+          "domain": "EKORG",
+          "description": "Purchasing Organization",
+          "purpose": "Unique identifier for the purchasing organization",
+          "category": "KEY",
+          "check_table": null
+        },
+        "EKOTX": {
+          "data_element": "EKOTX",
+          "domain": "TEXT20",
+          "description": "Purchasing Organization Description",
+          "purpose": "Description of the purchasing organization",
+          "category": "DESCRIPTION",
+          "check_table": null
+        }
+      },
+      "related_tables": ["EKKO", "LFM1"],
+      "wrong_descriptions": ["Company Codes"],
+      "in_this_program": "Provides purchasing organization description for email"
+    },
+    "T005T": {
+      "purpose": "Country Names",
+      "description": "Contains country names in multiple languages",
+      "key_fields": ["LAND1", "SPRAS"],
+      "fields": {
+        "LAND1": {
+          "data_element": "LAND1",
+          "domain": "LAND1",
+          "description": "Country Key",
+          "purpose": "Country code",
+          "category": "KEY",
+          "check_table": "T005"
+        },
+        "SPRAS": {
+          "data_element": "SPRAS",
+          "domain": "SPRAS",
+          "description": "Language Key",
+          "purpose": "Language for the description",
+          "category": "KEY",
+          "check_table": "T002"
+        },
+        "LANDX": {
+          "data_element": "LANDX",
+          "domain": "TEXT15",
+          "description": "Country Name",
+          "purpose": "Name of the country in the specified language",
+          "category": "DESCRIPTION",
+          "check_table": null
+        }
+      },
+      "related_tables": ["T005", "ADRC"],
+      "wrong_descriptions": ["Language Master"],
+      "in_this_program": "Provides country name for email address block"
+    }
+  },
+  "field_index": {
+    "KALSK": {
+      "tables": ["LFM1"],
+      "category": "PRICING"
+    },
+    "LIFNR": {
+      "tables": ["LFA1", "LFM1", "EKKO", "QMEL"],
+      "category": "VENDOR"
+    },
+    "EKORG": {
+      "tables": ["LFM1", "EKKO", "T024E", "QMEL"],
+      "category": "PURCHASING"
+    },
+    "MATNR": {
+      "tables": ["EKPO", "QMEL", "MAKT"],
+      "category": "MATERIAL"
+    },
+    "ATINN": {
+      "tables": ["CAWN", "CAWNT"],
+      "category": "CHARACTERISTIC"
+    },
+    "QMNUM": {
+      "tables": ["QMEL", "QMMA"],
+      "category": "QUALITY"
+    },
+    "ADRNR": {
+      "tables": ["LFA1", "ADR6", "ADRC", "T001"],
+      "category": "ADDRESS"
+    },
+    "EBELN": {
+      "tables": ["EKKO", "EKPO", "QMEL"],
+      "category": "PURCHASING"
+    }
+  },
+  "wrong_descriptions": {
+    "KALSK": ["color characteristic", "customer group", "color group"],
+    "LFA1": ["Customer Master"],
+    "QMEL": ["CFP", "Inspection Lots", "Qualification Management"],
+    "QMMA": ["Activation Management", "Inspection Lot Assignments"],
+    "CAWN": ["Work Center"],
+    "CAWNT": ["Work Center Text"],
+    "ADR6": ["Physical Addresses"],
+    "ADRC": ["Email Addresses"],
+    "T001": ["Purchasing Organizations"],
+    "T024E": ["Company Codes"],
+    "MAKT": ["Material Master"],
+    "T005T": ["Language Master"]
+  },
+  
+  "VBAK": {
+    "purpose": "Sales Order Header",
+    "description": "Contains header data for sales orders including customer, sales organization, dates, and order type",
+    "key_fields": ["VBELN"],
+    "fields": {
+      "VBELN": {
+        "data_element": "VBELN",
+        "domain": "VBELN",
+        "description": "Sales Order Number",
+        "purpose": "Unique identifier for the sales order",
+        "category": "KEY",
+        "check_table": null
+      },
+      "ERDAT": {
+        "data_element": "ERDAT",
+        "domain": "DATUM",
+        "description": "Created On",
+        "purpose": "Date the sales order was created",
+        "category": "ATTRIBUTE",
+        "check_table": null
+      },
+      "ERZET": {
+        "data_element": "ERZET",
+        "domain": "UZEIT",
+        "description": "Created At",
+        "purpose": "Time the sales order was created",
+        "category": "ATTRIBUTE",
+        "check_table": null
+      },
+      "ERNAM": {
+        "data_element": "ERNAM",
+        "domain": "USNAM",
+        "description": "Created By",
+        "purpose": "User who created the sales order",
+        "category": "ATTRIBUTE",
+        "check_table": null
+      },
+      "KUNNR": {
+        "data_element": "KUNNR",
+        "domain": "KUNNR",
+        "description": "Customer Number",
+        "purpose": "Customer for the sales order (sold-to party)",
+        "category": "ATTRIBUTE",
+        "check_table": "KNA1"
+      },
+      "VKORG": {
+        "data_element": "VKORG",
+        "domain": "VKORG",
+        "description": "Sales Organization",
+        "purpose": "Sales organization responsible for the order",
+        "category": "ATTRIBUTE",
+        "check_table": "TVKO"
+      },
+      "VTWEG": {
+        "data_element": "VTWEG",
+        "domain": "VTWEG",
+        "description": "Distribution Channel",
+        "purpose": "Distribution channel for the order",
+        "category": "ATTRIBUTE",
+        "check_table": "TVTW"
+      },
+      "SPART": {
+        "data_element": "SPART",
+        "domain": "SPART",
+        "description": "Division",
+        "purpose": "Division for the order",
+        "category": "ATTRIBUTE",
+        "check_table": "TSPA"
+      },
+      "AUART": {
+        "data_element": "AUART",
+        "domain": "AUART",
+        "description": "Sales Document Type",
+        "purpose": "Type of the sales document (standard order, contract, etc.)",
+        "category": "ATTRIBUTE",
+        "check_table": "TVAK"
+      },
+      "BUKRS": {
+        "data_element": "BUKRS",
+        "domain": "BUKRS",
+        "description": "Company Code",
+        "purpose": "Company code for the sales order",
+        "category": "ATTRIBUTE",
+        "check_table": "T001"
+      },
+      "BSTNK": {
+        "data_element": "BSTNK",
+        "domain": "BSTNK",
+        "description": "Customer Purchase Order Number",
+        "purpose": "Customer's own purchase order reference number",
+        "category": "ATTRIBUTE",
+        "check_table": null
+      },
+      "BSTDK": {
+        "data_element": "BSTDK",
+        "domain": "DATUM",
+        "description": "Customer Purchase Order Date",
+        "purpose": "Date of the customer's purchase order",
+        "category": "ATTRIBUTE",
+        "check_table": null
+      },
+      "WAERK": {
+        "data_element": "WAERK",
+        "domain": "WAERS",
+        "description": "Document Currency",
+        "purpose": "Currency of the sales document",
+        "category": "ATTRIBUTE",
+        "check_table": "TCURC"
+      },
+      "AUDAT": {
+        "data_element": "AUDAT",
+        "domain": "DATUM",
+        "description": "Document Date",
+        "purpose": "Date of the sales document",
+        "category": "ATTRIBUTE",
+        "check_table": null
+      },
+      "VSBED": {
+        "data_element": "VSBED",
+        "domain": "VSBED",
+        "description": "Shipping Conditions",
+        "purpose": "Shipping conditions for the order",
+        "category": "ATTRIBUTE",
+        "check_table": "TVSB"
+      },
+      "KALSM": {
+        "data_element": "KALSM_D",
+        "domain": "KALSM",
+        "description": "Pricing Procedure",
+        "purpose": "Procedure for pricing determination",
+        "category": "ATTRIBUTE",
+        "check_table": "T683"
+      },
+      "KNUMV": {
+        "data_element": "KNUMV",
+        "domain": "KNUMV",
+        "description": "Document Condition Number",
+        "purpose": "Number for the pricing condition record",
+        "category": "ATTRIBUTE",
+        "check_table": null
+      },
+      "KUNAG": {
+        "data_element": "KUNAG",
+        "domain": "KUNNR",
+        "description": "Sold-to Party",
+        "purpose": "Customer who is the sold-to party",
+        "category": "ATTRIBUTE",
+        "check_table": "KNA1"
+      },
+      "KUNWE": {
+        "data_element": "KUNWE",
+        "domain": "KUNNR",
+        "description": "Ship-to Party",
+        "purpose": "Customer who is the ship-to party",
+        "category": "ATTRIBUTE",
+        "check_table": "KNA1"
+      },
+      "LIFSK": {
+        "data_element": "LIFSK",
+        "domain": "LIFSK",
+        "description": "Delivery Block",
+        "purpose": "Block reason for delivery",
+        "category": "ATTRIBUTE",
+        "check_table": "TVLS"
+      },
+      "FKSK": {
+        "data_element": "FKSK",
+        "domain": "FKSK",
+        "description": "Billing Block",
+        "purpose": "Block reason for billing",
+        "category": "ATTRIBUTE",
+        "check_table": "TVFS"
+      }
+    }
+  }
+}

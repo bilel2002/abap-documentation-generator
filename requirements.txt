@@ -1,0 +1,12 @@
+streamlit
+pymupdf
+requests
+sentence-transformers
+faiss-cpu
+numpy
+regex
+tqdm
+pandas
+chromadb
+torchvision
+groq

@@ -1,0 +1,5417 @@
+*&---------------------------------------------------------------------------------*
+*& Report  Z_INTPLM_MC_PARI_V2
+*&
+*&---------------------------------------------------------------------------------*
+*&
+*&
+*& MAL     27.06.2022      DEVK9A1MCN Maj wis_extract-saiso wis_extract-saisj      *
+*& MAL     27.03.2023      ABAP-388 100 -Interface- Intégration des fichiers MC&SP *
+*& AHO     28.08.2024      ABAP-1231-Intégration MC  réinitialisation du classement*
+*&                         douanier en cas de reconduction du modèle               *
+*& AHO     18.10.2024      Mise à jour de la table ZPARI_DECISION pour positionnement
+*&                         pays de l'article
+*& AHO     25.10.2024      Alimentation de la tables des compositions pour les
+*&                         nouveaux MC d'un MODL existant
+*&---------------------------------------------------------------------------------*
+REPORT z_intplm_mc_pari_v2 MESSAGE-ID zplm.
+
+TABLES  : zplm_files_load.
+
+CONSTANTS : wgc_separator TYPE char1 VALUE ';',
+            wgc_commit    TYPE flag VALUE 'X'.
+
+
+DATA : wgt_extract  TYPE TABLE OF zplm_files_load,
+       wgt_log      TYPE TABLE OF zplm_log,
+       wgt_extract2 TYPE TABLE OF zplm_files_load2,
+       wgt_log2     TYPE TABLE OF zplm_log2,
+       wgv_return   TYPE sy-subrc.
+
+DATA : gv_url_prd  TYPE tvarvc-low,
+       gv_url_test TYPE tvarvc-low.
+
+TYPES : tt_zpari_mcv     TYPE STANDARD TABLE OF zpari_mcv,
+        tt_zpari_mcv_pay TYPE STANDARD TABLE OF zpari_mcv_pay.
+
+*-----------General------------
+SELECTION-SCREEN BEGIN OF BLOCK g1 WITH FRAME TITLE text-001.
+PARAMETERS : p_ekorg TYPE ekorg MATCHCODE OBJECT h_t024e,
+             p_date  TYPE sy-datum.
+SELECT-OPTIONS : s_idmodl  FOR zplm_files_load-idplm_modl,
+                 s_idmc  FOR zplm_files_load-idplm_mc.
+PARAMETERS : p_mc TYPE flag AS CHECKBOX USER-COMMAND ge.
+PARAMETERS : p_sp TYPE flag AS CHECKBOX USER-COMMAND ge.
+
+
+SELECTION-SCREEN BEGIN OF BLOCK b02 WITH FRAME TITLE text-b02.
+* Destination photos :
+PARAMETERS : p_dir_p TYPE epsf-epsdirnam
+                      DEFAULT '/interfaces/pari/photos/'.
+SELECTION-SCREEN END OF BLOCK b02.
+
+
+SELECTION-SCREEN BEGIN OF BLOCK g2 WITH FRAME TITLE text-009.
+PARAMETERS : p_entete TYPE flag AS CHECKBOX.
+SELECTION-SCREEN END OF BLOCK g2.
+SELECTION-SCREEN END OF BLOCK g1.
+*------------------------------------
+
+*------------MC------------
+SELECTION-SCREEN BEGIN OF BLOCK mc WITH FRAME TITLE text-000.
+SELECTION-SCREEN BEGIN OF BLOCK mc1 WITH FRAME TITLE text-002.
+PARAMETERS : p_fil  TYPE flag AS CHECKBOX USER-COMMAND fil MODIF ID pmc,
+             p_dir  TYPE epsf-epsdirnam DEFAULT '/interfaces/intplm/' LOWER CASE MODIF ID fil,
+             p_arch TYPE epsf-epsdirnam DEFAULT '/interfaces/intplm/' LOWER CASE MODIF ID fil.
+
+SELECTION-SCREEN END OF BLOCK mc1.
+
+SELECTION-SCREEN BEGIN OF BLOCK mc2 WITH FRAME TITLE text-003.
+PARAMETERS : p_check TYPE flag AS CHECKBOX USER-COMMAND chk MODIF ID pmc,
+             p_error TYPE flag AS CHECKBOX MODIF ID chk,
+             p_old   TYPE flag AS CHECKBOX MODIF ID chk.
+SELECTION-SCREEN END OF BLOCK mc2.
+
+SELECTION-SCREEN BEGIN OF BLOCK mc3 WITH FRAME TITLE text-004.
+PARAMETERS : p_integ TYPE flag AS CHECKBOX USER-COMMAND int MODIF ID pmc.
+SELECTION-SCREEN END OF BLOCK mc3.
+SELECTION-SCREEN END OF BLOCK mc.
+*------------------------------------
+
+*------------SP------------
+SELECTION-SCREEN BEGIN OF BLOCK sp WITH FRAME TITLE text-050.
+SELECTION-SCREEN BEGIN OF BLOCK sp1 WITH FRAME TITLE text-002.
+PARAMETERS : p_fil2  TYPE flag AS CHECKBOX USER-COMMAND fil MODIF ID psp,
+             p_dir2  TYPE epsf-epsdirnam DEFAULT '/interfaces/intplm/' LOWER CASE MODIF ID fi2,
+             p_arch2 TYPE epsf-epsdirnam DEFAULT '/interfaces/intplm/' LOWER CASE MODIF ID fi2.
+
+SELECTION-SCREEN END OF BLOCK sp1.
+
+SELECTION-SCREEN BEGIN OF BLOCK sp2 WITH FRAME TITLE text-003.
+PARAMETERS : p_check2 TYPE flag AS CHECKBOX USER-COMMAND ch2 MODIF ID psp,
+             p_error2 TYPE flag AS CHECKBOX MODIF ID ch2,
+             p_old2   TYPE flag AS CHECKBOX MODIF ID ch2.
+SELECTION-SCREEN END OF BLOCK sp2.
+
+SELECTION-SCREEN BEGIN OF BLOCK sp3 WITH FRAME TITLE text-004.
+PARAMETERS : p_integ2 TYPE flag AS CHECKBOX USER-COMMAND in2 MODIF ID psp.
+SELECTION-SCREEN END OF BLOCK sp3.
+
+SELECTION-SCREEN END OF BLOCK sp.
+*------------------------------------
+"
+
+INITIALIZATION.
+  p_date = sy-datum.
+  p_entete = 'X'.
+
+*--------------------------------------------------------------------*
+* INSERT RZE ABAP-1293 02/08/2024
+* Gérer l'URL du serveur PLM dans une variable
+*--------------------------------------------------------------------*
+  CLEAR : gv_url_prd, gv_url_test.
+
+  SELECT SINGLE low FROM tvarvc
+             INTO gv_url_prd
+             WHERE name = 'ZINTPLM_PRD_URL'
+             AND   type = 'P'.
+
+  SELECT SINGLE low FROM tvarvc
+             INTO gv_url_test
+             WHERE name = 'ZINTPLM_TEST_URL'
+             AND   type = 'P'.
+*--------------------------------------------------------------------*
+
+AT SELECTION-SCREEN OUTPUT.
+
+  PERFORM screen_change.
+
+START-OF-SELECTION.
+
+
+  DATA : wlv_tabix   TYPE sy-tabix.
+
+  break giraudj.
+
+*-------------------MC-------------------
+  IF p_mc IS NOT INITIAL.
+
+    DATA : wls_extract LIKE LINE OF wgt_extract.
+
+
+    IF p_fil IS NOT INITIAL.
+
+      PERFORM load_files.
+
+      PERFORM save_bdd TABLES wgt_extract USING wgc_commit CHANGING wgv_return.
+
+      REFRESH wgt_extract.
+
+    ENDIF.
+
+    IF p_check IS NOT INITIAL.
+
+      PERFORM add_lines.
+
+      PERFORM del_doublon. "pour rendre obselete les lignes anterieur d'un meme IDPLM_MC
+
+      PERFORM save_bdd TABLES wgt_extract USING wgc_commit CHANGING wgv_return.
+
+      REFRESH wgt_extract.
+
+      PERFORM add_lines.
+
+      LOOP AT wgt_extract INTO wls_extract.
+        wlv_tabix = sy-tabix.
+        CLEAR wgv_return.
+        PERFORM check_data CHANGING wls_extract wgv_return.
+        MODIFY wgt_extract FROM wls_extract INDEX wlv_tabix.
+      ENDLOOP.
+
+      PERFORM save_bdd TABLES wgt_extract USING wgc_commit CHANGING wgv_return.
+      PERFORM save_log USING wgc_commit.
+      REFRESH wgt_extract.
+
+    ENDIF.
+
+    IF p_integ IS NOT INITIAL.
+
+      SELECT * FROM  zplm_files_load APPENDING TABLE wgt_extract WHERE statut_tech = '0' AND ekorg = p_ekorg AND idplm_modl IN s_idmodl AND idplm_mc IN s_idmc.
+
+      PERFORM integ_pari TABLES wgt_extract.
+
+    ENDIF.
+
+  ENDIF.
+*-------------------MC-------------------
+*-------------------SP-------------------
+  IF p_sp IS NOT INITIAL.
+
+    DATA : wls_extract2 LIKE LINE OF wgt_extract2.
+
+
+
+    IF p_fil2 IS NOT INITIAL.
+
+      PERFORM load_files2.
+*
+      PERFORM save_bdd2 TABLES wgt_extract2 USING wgc_commit CHANGING wgv_return.
+
+      REFRESH wgt_extract2.
+
+    ENDIF.
+
+    IF p_check2 IS NOT INITIAL.
+
+      PERFORM add_lines2.
+*
+      PERFORM del_doublon2. "pour rendre obselete les lignes anterieur d'un meme IDPLM_MC
+*
+      PERFORM save_bdd2 TABLES wgt_extract2 USING wgc_commit CHANGING wgv_return.
+
+      REFRESH wgt_extract2.
+
+      PERFORM add_lines2.
+
+      LOOP AT wgt_extract2 INTO wls_extract2.
+        wlv_tabix = sy-tabix.
+        CLEAR wgv_return.
+        PERFORM check_data2 CHANGING wls_extract2 wgv_return.
+        MODIFY wgt_extract2 FROM wls_extract2 INDEX wlv_tabix.
+      ENDLOOP.
+
+      PERFORM save_bdd2 TABLES wgt_extract2 USING wgc_commit CHANGING wgv_return.
+      PERFORM save_log2 USING wgc_commit.
+      REFRESH wgt_extract2.
+
+    ENDIF.
+
+    IF p_integ2 IS NOT INITIAL.
+
+      SELECT * FROM  zplm_files_load2 APPENDING TABLE wgt_extract2 WHERE statut_tech = '0'  AND ekorg = p_ekorg.
+
+      PERFORM integ_pari2 TABLES wgt_extract2.
+
+    ENDIF.
+
+  ENDIF.
+*-------------------SP-------------------
+
+END-OF-SELECTION.
+*&---------------------------------------------------------------------*
+*&      Form  SCREEN_CHANGE
+*&---------------------------------------------------------------------*
+FORM screen_change .
+
+  IF p_mc IS INITIAL.
+    PERFORM hide_group USING 'PMC'.
+  ENDIF.
+  IF p_fil = ''.
+    PERFORM hide_group USING 'FIL'.
+  ENDIF.
+  IF p_check = ''.
+    PERFORM hide_group USING 'CHK'.
+  ENDIF.
+  IF p_integ = ''.
+    PERFORM hide_group USING 'INT'.
+  ENDIF.
+
+
+  IF p_sp IS INITIAL.
+    PERFORM hide_group USING 'PSP'.
+  ENDIF.
+  IF p_fil2 = ''.
+    PERFORM hide_group USING 'FI2'.
+  ENDIF.
+  IF p_check2 = ''.
+    PERFORM hide_group USING 'CH2'.
+  ENDIF.
+  IF p_integ2 = ''.
+    PERFORM hide_group USING 'IN2'.
+  ENDIF.
+
+
+
+ENDFORM.
+
+*&---------------------------------------------------------------------*
+*&      Form  HIDE_GROUP
+*&---------------------------------------------------------------------*
+FORM hide_group USING wiv_group TYPE screen-group1.
+
+  LOOP AT SCREEN.
+    IF screen-group1 = wiv_group.
+      screen-active = 0.
+      MODIFY SCREEN.
+    ENDIF.
+  ENDLOOP.
+
+ENDFORM.                    " HIDE_GROUP
+*&---------------------------------------------------------------------*
+*&      Form  SHOW_GROUP
+*&---------------------------------------------------------------------*
+FORM show_group USING wiv_group TYPE screen-group1.
+
+  LOOP AT SCREEN.
+    IF screen-group1 = wiv_group.
+      screen-active = 1.
+      MODIFY SCREEN.
+    ENDIF.
+  ENDLOOP.
+
+ENDFORM.                    " HIDE_GROUP
+*&---------------------------------------------------------------------*
+*&      Form  LOAD_FILES
+*&---------------------------------------------------------------------*
+FORM load_files .
+
+  DATA : wlt_files TYPE TABLE OF epsfili,
+         wls_file  LIKE LINE OF wlt_files.
+
+  DATA : wlv_exist  TYPE flag,
+         wlv_traite TYPE flag.
+
+  DATA :  wlv_mask TYPE epsf-epsfilnam.
+
+  wlv_mask = |MC_*|.
+
+  CALL FUNCTION 'EPS_GET_DIRECTORY_LISTING'
+    EXPORTING
+      dir_name               = p_dir
+      file_mask              = wlv_mask
+    TABLES
+      dir_list               = wlt_files
+    EXCEPTIONS
+      invalid_eps_subdir     = 1
+      sapgparam_failed       = 2
+      build_directory_failed = 3
+      no_authorization       = 4
+      read_directory_failed  = 5
+      too_many_read_errors   = 6
+      empty_directory_list   = 7
+      OTHERS                 = 8.
+
+  SORT wlt_files.
+
+  LOOP AT wlt_files INTO wls_file.
+
+    CLEAR : wlv_exist, wlv_traite.
+
+    PERFORM chech_file USING wls_file-name CHANGING wlv_exist wlv_traite.
+
+    IF wlv_exist IS INITIAL.
+*      TODO Message nouveau fichier intégré et a traité
+      PERFORM read_file USING wls_file-name ''.
+      PERFORM move_file_ok USING wls_file-name ''.
+    ELSE.
+      IF wlv_traite IS NOT INITIAL.
+*       TODO Message fichier déjà intégré et traité
+      ELSE.
+*        TODO Message fichier déjà intégré et a traité
+        SELECT * FROM zplm_files_load APPENDING TABLE wgt_extract WHERE file_name_tech = wls_file-name.
+      ENDIF.
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  READ_FILE
+*&---------------------------------------------------------------------*
+FORM read_file  USING    wiv_file TYPE epsfilnam
+                         wiv_sp TYPE flag.
+
+  DATA : wlv_line  TYPE string,
+         wlt_line  TYPE TABLE OF string,
+         wlv_zone  TYPE string,
+         wlv_tabix TYPE sy-tabix.
+
+  DATA : wlv_chemin TYPE string,
+         wlv_test   TYPE string.
+
+  DATA : wls_extract   LIKE LINE OF wgt_extract,
+         wls_extract2  LIKE LINE OF wgt_extract2,
+         wlv_timestamp TYPE timst_kk.
+
+  DATA : wlv_atinn TYPE cawnt-atinn.
+
+  DATA : wlv_num_ligne TYPE int2.
+
+  DATA : wlv_nb_ligne TYPE int4.
+
+  FIELD-SYMBOLS : <wlf_extract_field> TYPE any.
+
+  wlv_timestamp = |{ sy-datum }{ sy-uzeit }|.
+
+  IF wiv_sp IS INITIAL.
+    wlv_test = p_dir.
+  ELSE.
+    wlv_test = p_dir2.
+  ENDIF.
+
+  FIND REGEX '/$' IN wlv_test.
+  IF sy-subrc <> 0.
+    IF wiv_sp IS INITIAL.
+      wlv_chemin = |{ p_dir }/{ wiv_file }|.
+    ELSE.
+      wlv_chemin = |{ p_dir2 }/{ wiv_file }|.
+    ENDIF.
+  ELSE.
+    IF wiv_sp IS INITIAL.
+      wlv_chemin = |{ p_dir }{ wiv_file }|.
+    ELSE.
+      wlv_chemin = |{ p_dir2 }{ wiv_file }|.
+    ENDIF.
+  ENDIF.
+
+
+  OPEN DATASET wlv_chemin IN TEXT MODE FOR INPUT ENCODING NON-UNICODE.
+  IF sy-subrc = 0.
+
+    DO.
+      READ DATASET wlv_chemin INTO wlv_line.
+      IF sy-subrc = 0.
+
+        IF p_entete IS NOT INITIAL AND sy-index = 1.
+          CONTINUE.
+        ENDIF.
+
+        ADD 1 TO wlv_num_ligne.
+
+        REFRESH wlt_line.
+        CLEAR : wlv_tabix.
+        SPLIT wlv_line AT wgc_separator INTO TABLE wlt_line.
+        DESCRIBE TABLE wlt_line LINES wlv_nb_ligne.
+        IF wlv_nb_ligne = 1.
+          CONTINUE.
+        ENDIF.
+
+        CLEAR wls_extract.
+
+        LOOP AT wlt_line INTO wlv_zone.
+
+          IF sy-tabix = 1.
+            wlv_tabix = sy-tabix + 1.
+          ELSE.
+            wlv_tabix = sy-tabix + 5.
+          ENDIF.
+
+          IF wiv_sp IS INITIAL.
+            ASSIGN COMPONENT wlv_tabix OF STRUCTURE wls_extract TO <wlf_extract_field>.
+          ELSE.
+            ASSIGN COMPONENT wlv_tabix OF STRUCTURE wls_extract2 TO <wlf_extract_field>.
+          ENDIF.
+
+          IF sy-tabix = 21.
+            TRANSLATE wlv_zone USING ',.'.
+          ENDIF.
+
+          IF wlv_zone = cl_abap_char_utilities=>cr_lf(1) OR
+             wlv_zone = cl_abap_char_utilities=>cr_lf+1(1) OR
+            wlv_zone = cl_abap_char_utilities=>cr_lf.
+            CLEAR wlv_zone.
+          ENDIF.
+
+          REPLACE ALL OCCURRENCES OF cl_abap_char_utilities=>cr_lf(1) IN wlv_zone WITH ''.
+          REPLACE ALL OCCURRENCES OF cl_abap_char_utilities=>cr_lf+1(1) IN wlv_zone WITH ''.
+          REPLACE ALL OCCURRENCES OF cl_abap_char_utilities=>cr_lf IN wlv_zone WITH ''.
+
+          IF wlv_zone = 'x'.
+            wlv_zone = 'X'.
+          ENDIF.
+
+* BEGIN INSERT RZE 29/06/2023 RICEF-100
+* Gestion des tailles min et max en lettre envoyées par PLM
+          IF wlv_tabix = '84' OR wlv_tabix = '85' OR wlv_tabix = '89' OR wlv_tabix = '90'.
+            CALL FUNCTION 'CONVERSION_EXIT_ATINN_INPUT'
+              EXPORTING
+                input  = wls_extract-grillet
+              IMPORTING
+                output = wlv_atinn.
+
+* Taille min
+            SELECT SINGLE atzhl FROM cawnt
+                                INTO @DATA(wlv_atzhl)
+                                WHERE atinn = @wlv_atinn
+                                AND   spras = @sy-langu
+                                AND   atwtb = @wlv_zone.
+            IF sy-subrc = 0.
+              wlv_zone = wlv_atzhl.
+            ENDIF.
+
+          ENDIF.
+* END INSERT RZE 29/06/2023 RICEF-100
+
+
+* DEB INS ABAP-2071 HBO
+          IF wlv_tabix = '119'. "sy-tabix 115
+            wls_extract-nompers = wlv_zone.
+          ENDIF.
+* END INS ABAP-2071 HBO
+          IF <wlf_extract_field> IS ASSIGNED."ABAP-2071 HBO
+            <wlf_extract_field> = wlv_zone.
+          ENDIF."ABAP-2071 HBO
+          UNASSIGN  <wlf_extract_field>."ABAP-2071 HBO
+*          <wlf_extract_field> = wlv_zone." -- ABAP-2071 HBO
+
+        ENDLOOP.
+
+* DEB INS ABAP-2593 MSA
+        " Nettoyage du module linéaire
+        IF wls_extract-laygr IS NOT INITIAL.
+          " Supprimer les guillemets
+          REPLACE ALL OCCURRENCES OF '"' IN wls_extract-laygr WITH ''.
+          " Supprimer les espaces en début/fin
+          CONDENSE wls_extract-laygr.
+        ENDIF.
+
+* END INS ABAP-2593 MSA
+
+        IF wiv_sp IS INITIAL.
+          wls_extract-mandt = sy-mandt.
+          wls_extract-file_name_tech = wiv_file.
+          wls_extract-timestamp_tech = wlv_timestamp.
+          wls_extract-statut_tech = ''.
+          wls_extract-num_ligne = wlv_num_ligne.
+          APPEND wls_extract TO wgt_extract.
+        ELSE.
+          wls_extract2-mandt = sy-mandt.
+          wls_extract2-file_name_tech = wiv_file.
+          wls_extract2-timestamp_tech = wlv_timestamp.
+          wls_extract2-statut_tech = ''.
+          wls_extract2-num_ligne = wlv_num_ligne.
+          APPEND wls_extract2 TO wgt_extract2.
+        ENDIF.
+
+      ELSE.
+        EXIT.
+      ENDIF.
+
+    ENDDO.
+
+    CLOSE DATASET wlv_chemin.
+
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CHECH_FILE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_WLS_FILE  text
+*      <--P_WLV_EXIST  text
+*----------------------------------------------------------------------*
+FORM chech_file  USING    wiv_file TYPE epsfilnam
+                 CHANGING wev_exist TYPE flag
+                          wev_traite TYPE flag.
+
+  DATA : wls_file_load TYPE zplm_files_load.
+
+*gestion des statuts de la table
+* '' = intégré dans la table
+* 0 = intégré et check effectué avec succés
+* 1 = intégré et traité
+* 2 = intégré et check en erreur
+*
+  SELECT SINGLE * FROM zplm_files_load INTO wls_file_load WHERE file_name_tech = wiv_file AND ekorg = p_ekorg.
+  IF sy-subrc = 0.
+    wev_exist = 'X'.
+    IF wls_file_load-statut_tech = 1.
+    ELSE.
+      SELECT SINGLE * FROM zplm_files_load INTO wls_file_load WHERE file_name_tech = wiv_file AND statut_tech = 1 AND ekorg = p_ekorg.
+      IF sy-subrc = 0.
+        wev_traite = 'X'.
+      ENDIF.
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  ADD_LINES
+*&---------------------------------------------------------------------*
+FORM add_lines .
+
+  SELECT * FROM  zplm_files_load APPENDING TABLE wgt_extract WHERE statut_tech = '' AND ekorg = p_ekorg AND idplm_modl IN s_idmodl AND idplm_mc IN s_idmc.
+
+  IF p_error IS NOT INITIAL.
+    SELECT * FROM zplm_files_load APPENDING TABLE wgt_extract WHERE statut_tech = 2 AND ekorg = p_ekorg AND idplm_modl IN s_idmodl AND idplm_mc IN s_idmc.
+    SELECT * FROM zplm_files_load APPENDING TABLE wgt_extract WHERE statut_tech = 4 AND ekorg = p_ekorg AND idplm_modl IN s_idmodl AND idplm_mc IN s_idmc.
+  ENDIF.
+
+  IF p_old IS NOT INITIAL.
+    SELECT * FROM  zplm_files_load APPENDING TABLE wgt_extract WHERE statut_tech = 0 AND ekorg = p_ekorg AND idplm_modl IN s_idmodl AND idplm_mc IN s_idmc.
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  DEL_DOUBLON
+*&---------------------------------------------------------------------*
+FORM del_doublon.
+
+  DATA : wls_extract LIKE LINE OF wgt_extract,
+         wlv_tabix   TYPE sy-tabix.
+
+  DATA : wlt_plm_file_load TYPE TABLE OF zplm_files_load,
+         wls_plm_file_load LIKE LINE OF wlt_plm_file_load.
+
+  FIELD-SYMBOLS : <wlf_extract_main> TYPE zplm_files_load,
+                  <wlf_extract_it>   TYPE zplm_files_load,
+                  <wlf_extract_bdd>  TYPE zplm_files_load.
+
+  SORT wgt_extract BY file_name_tech DESCENDING num_ligne ASCENDING.
+
+  LOOP AT wgt_extract ASSIGNING <wlf_extract_main> WHERE statut_tech <> 3.
+    wlv_tabix = sy-tabix.
+    ADD 1 TO wlv_tabix.
+
+*** On rend obselete les doublons plus vieux en table interne
+    LOOP AT wgt_extract ASSIGNING <wlf_extract_it> FROM wlv_tabix WHERE idplm_mc = <wlf_extract_main>-idplm_mc.
+      <wlf_extract_it>-statut_tech = 3.
+    ENDLOOP.
+
+*** On rend obselete les doublons plus vieux en base de donnée
+* BEGIN DEL RZE 21/06/2023 RICEF-100
+*    SELECT * FROM zplm_files_load INTO TABLE wlt_plm_file_load WHERE idplm_mc = wls_extract-idplm_mc AND ( statut_tech = '' OR statut_tech = '0' OR statut_tech = '2' OR statut_tech = '4').
+* END DEL RZE 21/06/2023 RICEF-100
+* BEGIN INS RZE 21/06/2023 RICEF-100
+    SELECT * FROM zplm_files_load
+             INTO TABLE wlt_plm_file_load
+             WHERE idplm_mc = <wlf_extract_main>-idplm_mc
+             AND ( statut_tech = '' OR statut_tech = '0' OR statut_tech = '2' OR statut_tech = '4').
+* END INS  RZE 21/06/2023 RICEF-100
+
+    SORT wlt_plm_file_load BY file_name_tech num_ligne.
+
+    LOOP AT wlt_plm_file_load ASSIGNING <wlf_extract_bdd>.
+
+      READ TABLE wgt_extract TRANSPORTING NO FIELDS WITH KEY idplm_mc = <wlf_extract_bdd>-idplm_mc.   "On check si on la déjà traité en table interne
+      IF sy-subrc <> 0 . "si on ne l'a pas traité en table interne
+        IF <wlf_extract_bdd>-file_name_tech < <wlf_extract_main>-file_name_tech. "si en base de donnée le fichier est plus vieux alors on le rend obselete
+          <wlf_extract_bdd>-statut_tech = 3.
+        ELSE.                                                                    "si il existe une mise a jour plus récente en bdd, on rend obselete la ligne courante
+          <wlf_extract_main>-statut_tech = 3.
+        ENDIF.
+      ENDIF.
+
+    ENDLOOP.
+  ENDLOOP.
+
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SAVE_BDD
+*&---------------------------------------------------------------------*
+FORM save_bdd  TABLES wit_files STRUCTURE zplm_files_load
+               USING wiv_commit TYPE flag
+                CHANGING wev_subrc TYPE sy-subrc.
+
+  MODIFY zplm_files_load FROM TABLE wit_files.
+  IF sy-subrc = 0 AND wiv_commit IS NOT INITIAL.
+    COMMIT WORK AND WAIT.
+  ENDIF.
+
+  wev_subrc = sy-subrc.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CHECK_DATA
+*&---------------------------------------------------------------------*
+FORM check_data CHANGING wis_extract TYPE zplm_files_load
+                         wev_return TYPE sy-subrc.
+
+  DATA : wlv_number  TYPE int1,
+         wlv_error   TYPE flag,
+         wlv_message TYPE text150.
+
+  DATA : wlv_matkl           TYPE matkl,
+         wls_t023            TYPE t023,
+         wlv_stplm           TYPE zstplm,
+         wls_statu           TYPE zplm_trsco_statu,
+         wlv_zz_prsa         TYPE zz_prsa,
+         wls_zartproduitsais TYPE zartproduitsais,
+         wlv_saity           TYPE saity,
+         wlv_saiso           TYPE saiso,
+         wlv_saisj           TYPE saisj,
+         wls_twsai           TYPE twsai,
+         wls_cabn            TYPE cabn,
+         wlv_laygr           TYPE laygr,
+         wlv_atnam           TYPE atnam,
+         wls_twml            TYPE twml,
+         wls_twmlt           TYPE twmlt,
+         wlv_regmat          TYPE zregmat,
+         wlv_ekorg           TYPE ekorg,
+         wls_regrou          TYPE zpari_adm_regrou,
+         wlv_zz_coor         TYPE zz_lib,
+         wls_zartcoordonnee  TYPE zartcoordonnee,
+         wlv_aspe            TYPE zz_aspe,
+         wls_zartaspect      TYPE zartaspect,
+         wlv_cri1            TYPE zz_cri1,
+         wls_zartcritere1    TYPE zartcritere1,
+         wlv_mapr            TYPE zz_mapr,
+         wls_zartmatprinc    TYPE zartmatprinc,
+         wlv_prcl            TYPE zz_prcl,
+         wls_zartproduitcle  TYPE zartproduitcle,
+         wlv_sstuf           TYPE sstuf,
+         wls_twss            TYPE twss,
+         wlv_tpim            TYPE zz_tpim,
+         wls_zarttypeimport  TYPE zarttypeimport,
+         wlv_repa            TYPE zz_repa,
+         wlv_regthe          TYPE zregthe,
+         wls_zartrepart      TYPE zartrepartition,
+         wlv_segcli          TYPE zsegcli,
+         wlv_idvisu          TYPE zidvisu,
+         wls_regthe          TYPE zvaleur_regthe,
+         wls_segcli          TYPE zvaleur_segcli,
+         wls_idvuel          TYPE zvaleur_idvuel,
+         wlv_land1           TYPE zlandc,
+         wls_zpari_adm_pays  TYPE zpari_adm_pays,
+         wlv_color_sap       TYPE zcolor_sap,
+         wls_adm_color       TYPE zpari_adm_color,
+         wlv_error_api       TYPE string.
+
+  DATA : lv_vartai TYPE zvarmin, lv_cnt TYPE i.
+
+  DATA : wlv_statut_mdl TYPE char1,
+         wlv_statut_mc  TYPE char1.
+
+
+  CLEAR : wlv_statut_mdl, wlv_statut_mc, wlv_number.
+
+*Au cas ou il y a des checks différents en fonction des statuts - pas necessaire pour l'instant
+*   On determine le statut du modele et du mc
+*  PERFORM get_statut USING wis_extract 'MDL' CHANGING wlv_statut_mdl.
+*  PERFORM get_statut USING wis_extract 'MC' CHANGING wlv_statut_mc.
+*
+*
+*    IF     ( wlv_statut_mdl = 'C' AND wlv_statut_mc = 'C' ) or ( wlv_statut_mdl = 'M' AND wlv_statut_mc = 'C' ).
+*    ELSEIF wlv_statut_mdl = 'M' AND wlv_statut_mc = 'M'.
+*    ELSEIF wlv_statut_mdl = 'M' AND wlv_statut_mc = 'R'.
+*    ELSEIF wlv_statut_mdl = 'R' AND wlv_statut_mc = 'C'.
+*    ELSEIF wlv_statut_mdl = 'R' AND wlv_statut_mc = 'R'.
+*    ELSE.
+*    ENDIF.
+*Au cas ou il y a des checks différents en fonction des statuts - pas necessaire pour l'instant
+
+*Gestion des warning
+***SAITY
+*    IF wis_extract-saity IS NOT INITIAL.
+*      wlv_saity = wis_extract-saity.
+*      wlv_saiso = wis_extract-saiso.
+*      wlv_saisj = wis_extract-saisj.
+*
+*      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+*        EXPORTING
+*          input  = wis_extract-saiso
+*        IMPORTING
+*          output = wlv_saiso.
+*
+*      SELECT SINGLE * FROM twsai INTO wls_twsai WHERE saity = wlv_saity AND kjahr = wlv_saisj AND saiso = wlv_saiso.
+*      IF sy-subrc <> 0.
+*        wev_return = 2.
+*        ADD 1 TO wlv_number.
+*        CLEAR wlv_message.
+*        wlv_message = |Le code collection n’existe pas dans la saison { wlv_saiso }/{ wlv_saisj }|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+***REGMAT
+*    IF wis_extract-regmat IS NOT INITIAL.
+*      wlv_regmat = wis_extract-regmat.
+*      wlv_ekorg = wis_extract-ekorg.
+*      SELECT SINGLE * FROM zpari_adm_regrou INTO wls_regrou WHERE zregmat = wlv_regmat AND ekorg = wlv_ekorg.
+*      IF sy-subrc <> 0.
+*        wev_return = 2.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Regroupement n''existe pas '.
+*      ENDIF.
+*    ENDIF.
+*
+**RGTHE
+*    IF wis_extract-regthe IS NOT INITIAL.
+*      wlv_regthe = wis_extract-regthe.
+*      SELECT SINGLE * FROM zvaleur_regthe INTO wls_regthe WHERE zregthe = wlv_regthe AND zinactif = ''.
+*      IF sy-subrc <> 0.
+*        wev_return = 2.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Regroupement theme n’existe pas dans SAP'.
+*      ENDIF.
+*    ENDIF.
+*
+**SEGCLI
+*    IF wis_extract-segcli IS NOT INITIAL.
+*      wlv_segcli = wis_extract-segcli.
+*      SELECT SINGLE * FROM zvaleur_segcli INTO wls_segcli WHERE zsegcli = wlv_segcli AND zinactif = ''.
+*      IF sy-subrc <> 0.
+*        wev_return = 2.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Segment client n’existe pas dans SAP'.
+*      ENDIF.
+*    ENDIF.
+*
+**IDVISU
+*    IF wis_extract-idvisu IS NOT INITIAL.
+*      wlv_idvisu = wis_extract-idvisu.
+*      SELECT SINGLE * FROM zvaleur_idvuel INTO wls_idvuel WHERE zidvisu = wlv_idvisu AND zinactif = ''.
+*      IF sy-subrc <> 0.
+*        wev_return = 2.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Visuelle n’existe pas dans SAP'.
+*      ENDIF.
+*    ENDIF.
+*
+***ZZ_PRCL
+*    IF wis_extract-zz_prcl IS NOT INITIAL.
+*      wlv_prcl = wis_extract-zz_prcl.
+*      SELECT SINGLE * FROM zartproduitcle INTO wls_zartproduitcle WHERE zz_prcl = wlv_prcl AND langu = sy-langu AND zinactif = ''.
+*      IF sy-subrc <> 0.
+*        wev_return = 2.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Le produit clé n’existe pas dans SAP '.
+*      ENDIF.
+*    ENDIF.
+*
+**  Gestion des erreurs
+***ZZ_TPIM
+*    IF wis_extract-zz_tpim IS NOT INITIAL.
+*      wlv_tpim = wis_extract-zz_tpim.
+*      SELECT SINGLE * FROM zarttypeimport INTO wls_zarttypeimport WHERE zz_tpim = wlv_tpim AND langu = sy-langu AND zinactif = ''.
+*      IF sy-subrc <> 0.
+*        wev_return = 2.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Le type d’import n’existe pas et ou il est inactif'.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**ZZ_COOR
+*    IF wis_extract-libcoor IS NOT INITIAL.
+*      CONCATENATE '999/999' wis_extract-libcoor INTO wlv_zz_coor SEPARATED BY space.
+**  wlv_zz_coor =  wis_extract-libcoor.
+*
+*      SELECT SINGLE * FROM zartcoordonnee INTO wls_zartcoordonnee WHERE zz_lib = wlv_zz_coor.
+*      IF sy-subrc <> 0.
+**&- s'il existe pas, on le crée
+*        SUBMIT z_specifcoor
+*          WITH p_org EQ wis_extract-ekorg
+*          WITH p_text EQ wis_extract-libcoor
+*          WITH p_plm = 'X'
+*          AND RETURN.
+**
+*
+**&- recheck après création
+*        SELECT SINGLE * FROM zartcoordonnee INTO wls_zartcoordonnee WHERE zz_lib = wlv_zz_coor.
+*        IF sy-subrc <> 0.
+*          wev_return = 2.
+*          ADD 1 TO wlv_number.
+*          PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Coordonné n''existe pas '.
+*        ENDIF.
+*
+*      ENDIF.
+*
+*    ELSE.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Groupe de n’existe pas'.
+*    ENDIF.
+*
+***MATKL
+*    wlv_matkl = wis_extract-matkl.
+*    SELECT SINGLE * FROM t023 INTO wls_t023 WHERE matkl = wlv_matkl.
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Groupe de Marchandise n’existe pas'.
+*    ENDIF.
+*
+***MAKTX
+*    IF wis_extract-maktx IS INITIAL.
+*      wev_return = 4.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Libellé modele obligatoire'.
+*    ENDIF.
+*
+***STATUTMC
+*    wlv_stplm = wis_extract-statut.
+*    SELECT SINGLE * FROM zplm_trsco_statu INTO wls_statu WHERE stplm = wlv_stplm.
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Le statut n’existe pas'.
+*    ENDIF.
+*
+***ZZ_PRSA
+*    wlv_zz_prsa = wis_extract-zz_prsa.
+*    SELECT SINGLE * FROM zartproduitsais INTO wls_zartproduitsais WHERE zz_prsa = wlv_zz_prsa AND zinactif = ''.
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Le code instore n’existe pas'.
+*    ENDIF.
+*
+*
+*    wlv_atnam = wis_extract-grillet.
+*    SELECT SINGLE * FROM cabn INTO wls_cabn WHERE atkla = 'TAILLE' AND atnam  = wlv_atnam  .
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      CLEAR wlv_message.
+*      wlv_message = |La grille de taille n'existe pas { wis_extract-grillet }|.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*    ENDIF.
+*
+***LAYGR
+*    wlv_laygr = wis_extract-laygr.
+*    SELECT SINGLE * FROM twml INTO wls_twml WHERE laygr = wlv_laygr .
+*    IF sy-subrc <> 0 OR wlv_laygr IS INITIAL.
+*      IF wlv_laygr(2) EQ 'ZL' OR wlv_laygr(2) CA 'EL'.
+*        CLEAR: wls_twml, wls_twmlt, wlv_error_api.
+*        "TWML
+*        wls_twmlt-laygr = wls_twml-laygr = wlv_laygr.
+*        wls_twml-up_date = sy-datum.
+*        wls_twml-up_time = sy-uzeit.
+*        wls_twml-last_used_vers = '0000'.
+*
+*        "TMWLT
+*        wls_twmlt-laygr = wlv_laygr.
+*        wls_twmlt-spras = 'FR'.
+*        PERFORM call_api_plm_module_lineaire USING wis_extract-laygr CHANGING wls_twmlt-ltext wlv_error_api.
+*
+*        IF wls_twmlt-ltext IS INITIAL.
+*          wev_return = '4'.
+*          ADD 1 TO wlv_number.
+*          PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Le module linéaire n’existe pas'.
+*        ELSE.
+*          INSERT twml FROM wls_twml.
+*          IF sy-subrc = 0.
+*            INSERT twmlt FROM wls_twmlt.
+*            IF sy-subrc = 0.
+*              DATA lt_laygr TYPE laymod_table.
+*              DATA lt_wlmv TYPE TABLE OF wlmv.
+*              REFRESH lt_laygr.
+*              APPEND INITIAL LINE TO lt_laygr ASSIGNING FIELD-SYMBOL(<ls_laygr>).
+*              <ls_laygr>-laygr = wlv_laygr.
+*
+*              CALL FUNCTION 'WRF_WLMV_ARRAY_READ_ALL_VERS'
+*                EXPORTING
+*                  kzrfb            = 'X'
+*                TABLES
+*                  t_laymod         = lt_laygr
+*                  t_laymod_version = lt_wlmv.
+*
+*              "création du change pointeur
+*              PERFORM create_change_pointer USING wlv_laygr.
+*
+*
+*            ENDIF.
+*          ENDIF.
+*
+*        ENDIF.
+*
+*      ELSE.
+*        wev_return = '4'.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Le module linéaire n’existe pas'.
+*      ENDIF.
+*
+*    ENDIF.
+*
+***ZZ_ASPE
+*    IF wis_extract-zz_aspe IS NOT INITIAL. "+DEU 19.08.2021 : rendre le champ aspect facultatif
+*      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+*        EXPORTING
+*          input  = wis_extract-zz_aspe
+*        IMPORTING
+*          output = wlv_aspe.
+*
+*      SELECT SINGLE * FROM zartaspect INTO wls_zartaspect WHERE zz_aspe = wlv_aspe AND langu = sy-langu AND zinactif = ''.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Le code aspect n’existe pas'.
+*      ENDIF.
+*    ENDIF.
+*
+***Forme1
+*    wlv_cri1 = wis_extract-zz_cri1.
+*    SELECT SINGLE * FROM zartcritere1 INTO wls_zartcritere1 WHERE zz_cri1 = wlv_cri1 AND langu = sy-langu AND zinactif = ''.
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'La forme  n’existe pas'.
+*    ENDIF.
+*
+***ZZ_MAPR
+*    IF wis_extract-zz_mapr IS NOT INITIAL.
+*
+*      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+*        EXPORTING
+*          input  = wis_extract-zz_mapr
+*        IMPORTING
+*          output = wlv_mapr.
+*
+*      SELECT SINGLE * FROM zartmatprinc INTO wls_zartmatprinc WHERE zz_mapr = wlv_mapr AND langu = sy-langu AND zinactif = ''.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Le code matière principale n’existe pas'.
+*      ENDIF.
+*    ENDIF.
+*
+*
+***SSTUF
+*    wlv_sstuf = wis_extract-sstuf.
+*    SELECT SINGLE * FROM twss INTO wls_twss WHERE sstuf = wlv_sstuf .
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'NG n’existe pas dans SAP'.
+*    ENDIF.
+*
+***ZZ_REPA
+**  IF wis_extract-zz_repa IS NOT INITIAL.
+*    wlv_repa = wis_extract-zz_repa.
+*    SELECT SINGLE * FROM zartrepartition INTO wls_zartrepart WHERE zz_repa = wlv_repa AND zinactif = ''.
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Code répartition n’existe pas dans SAP'.
+*    ENDIF.
+**  ENDIF.
+*
+***PAYSCREATION
+*    wlv_land1 = wis_extract-landc.
+*    wlv_ekorg = wis_extract-ekorg.
+*    wlv_saisj = wis_extract-saisj.
+*
+*    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+*      EXPORTING
+*        input  = wis_extract-saiso
+*      IMPORTING
+*        output = wlv_saiso.
+*
+*    SELECT SINGLE * FROM zpari_adm_pays INTO wls_zpari_adm_pays WHERE land1 = wlv_land1 AND ekorg = wlv_ekorg AND saiso = wlv_saiso AND saisj = wlv_saisj.
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Le pays créateur n’existe pas '.
+*    ENDIF.
+*
+***ZZ_LICENCE
+*    IF wis_extract-liblicence IS NOT INITIAL.
+*      IF wis_extract-licence <> 'True' AND wis_extract-licence <> 'true'.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Licence renseigné et Coche licence non coché'.
+*      ENDIF.
+*    ELSE.
+*      IF wis_extract-licence <> 'False' AND wis_extract-licence <> 'false'.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Licence non renseigné et Coche licence coché'.
+*      ENDIF.
+*    ENDIF.
+*
+***COLOR_SAP
+*    wlv_color_sap = wis_extract-color_sap.
+*    wlv_ekorg = wis_extract-ekorg.
+*    wlv_saisj = wis_extract-saisj.
+*
+*    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+*      EXPORTING
+*        input  = wis_extract-saiso
+*      IMPORTING
+*        output = wlv_saiso.
+*
+*    SELECT SINGLE * FROM zpari_adm_color INTO wls_adm_color WHERE ekorg = wlv_ekorg AND saiso = wlv_saiso AND saisj = wlv_saisj AND color_sap = wlv_color_sap.
+*    IF sy-subrc <> 0.
+*      wev_return = sy-subrc.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'COLOR n’existe pas dans SAP'.
+*    ENDIF.
+*
+*    wis_extract-timestamp_tech = |{ sy-datum }{ sy-uzeit }|.
+*
+*    IF wev_return IS INITIAL OR wev_return = '2'.
+*      wis_extract-statut_tech = 0.
+*    ELSE.
+*      wis_extract-statut_tech = wev_return.
+*    ENDIF.
+*
+*
+**&-Forme2
+*    IF wis_extract-zz_cri2 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zartcritere2 INTO @DATA(wls_cri2) WHERE zz_cri2 = @wis_extract-zz_cri2.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        CLEAR wlv_message.
+*        wlv_message = |Forme2 { wis_extract-zz_cri2 } n’existe pas dans ZARTCRITERE2|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**&-#Forme 3
+*    IF wis_extract-zz_cri3 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zartcritere3 INTO @DATA(wls_cri3) WHERE zz_cri3 = @wis_extract-zz_cri3.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Forme3 { wis_extract-zz_cri3 } n’existe pas dans ZARTCRITERE3|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-#Forme 4
+*    IF wis_extract-zz_cri4 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zartcritere4 INTO @DATA(wls_cri4) WHERE zcri4 = @wis_extract-zz_cri4 .
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Forme4 { wis_extract-zz_cri4 } n’existe pas dans ZARTCRITERE4|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-#Forme 5
+*    IF wis_extract-zz_cri5 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zartcritere5 INTO @DATA(wls_cri5) WHERE zcri5 = @wis_extract-zz_cri5 .
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Forme5 { wis_extract-zz_cri5 } n’existe pas dans ZARTCRITERE5|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**&-#Finition 1
+*    IF wis_extract-zz_atfsh1 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zatt_fashion1 INTO @DATA(wls_fash1) WHERE zz_atfsh1 = @wis_extract-zz_atfsh1.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Finition1 { wis_extract-zz_atfsh1 } n’existe pas dans ZATT_FASHION1|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**&-#Propriété
+*    IF wis_extract-zz_atfsh2 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zatt_fashion2 INTO @DATA(wls_fash2) WHERE zz_atfsh2 = @wis_extract-zz_atfsh2.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Propriete { wis_extract-zz_atfsh2 } n’existe pas dans ZATT_FASHION2|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**&-#Détail
+*    IF wis_extract-zz_atfsh3 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zatt_fashion3 INTO @DATA(wls_fash3) WHERE zz_atfsh3 = @wis_extract-zz_atfsh3.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Detail { wis_extract-zz_atfsh3 } n’existe pas dans ZATT_FASHION3|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+*
+**&- Imprimé
+*    IF wis_extract-zz_atfsh4 IS NOT INITIAL .
+*      SELECT SINGLE * FROM zatt_fashion4 INTO @DATA(wls_fash4) WHERE zz_atfsh4 = @wis_extract-zz_atfsh4.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Imprimé { wis_extract-zz_atfsh4 } n’existe pas dans ZATT_FASHION4|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**&- Motif
+*    IF wis_extract-zz_atfsh5 IS NOT INITIAL .
+*      SELECT SINGLE * FROM zatt_fashion5 INTO @DATA(wls_fash5) WHERE zz_atfsh5 = @wis_extract-zz_atfsh5.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Motif { wis_extract-zz_atfsh5 } n’existe pas dans ZATT_FASHION5|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**&-#Univers 1
+*    IF wis_extract-zz_univ1 IS NOT INITIAL .
+*      SELECT SINGLE * FROM zartuniv1 INTO @DATA(wls_univer) WHERE zz_univ1 = @wis_extract-zz_univ1.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Univers1 { wis_extract-zz_univ1 } n’existe pas dans ZARTUNIV1|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-#Univers 2
+*    IF wis_extract-zz_univ2 IS NOT INITIAL .
+*      SELECT SINGLE * FROM zartuniv2 INTO @DATA(wls_univer2) WHERE zz_univ2 = @wis_extract-zz_univ2.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Univers2 { wis_extract-zz_univ2 } n’existe pas dans ZARTUNIV2|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-#Répartition 2
+*    IF wis_extract-zz_repa2 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zartrepartition2 INTO @DATA(wls_repart) WHERE zz_repa2 = @wis_extract-zz_repa2(4).
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Code répartition { wis_extract-zz_repa2 } n’existe pas dans ZARTREPARTITION2|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**&-#Période implantation
+*    IF wis_extract-perimpl IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_implant1 INTO @DATA(wls_impl) WHERE zz_impl = @wis_extract-perimpl.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Période implantation { wis_extract-perimpl } n’existe pas dans ZART_IMPLANT1|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+*
+**&-#Règle FDV
+*    IF wis_extract-regfdv IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_regfin INTO @DATA(wls_fdv) WHERE zfdv = @wis_extract-regfdv.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Règle fin de vie { wis_extract-regfdv } n’existe pas dans ZART_REGFIN|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-#Eco TLC
+*    IF wis_extract-zz_weca2 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_ecotlc INTO @DATA(wls_ecotlc) WHERE zeco_tlc = @wis_extract-zz_weca2.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Eco TLC { wis_extract-zz_weca2 } n’existe pas dans ZART_ECOTLC|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&- Projet O/N
+*    IF wis_extract-zz_proj1 EQ 't' OR wis_extract-zz_proj1 EQ 'X'. "True
+*      wis_extract-zz_proj1 = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_proj1 .
+*    ENDIF.
+*
+**&-#WEcare
+*    IF wis_extract-zz_weca1 EQ 't' OR wis_extract-zz_weca1 EQ 'X'. "True
+*      wis_extract-zz_weca1 = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_weca1 .
+*    ENDIF.
+*
+**&- ZZ_WECACR1
+*    IF wis_extract-zz_wecacr1 EQ 't' OR wis_extract-zz_weca1 EQ 'X'. "True
+*      wis_extract-zz_wecacr1 = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_wecacr1.
+*    ENDIF.
+*
+**é- ZZ_WECACR2
+*    IF wis_extract-zz_wecacr2 EQ 't' OR wis_extract-zz_wecacr2 EQ 'X'. "True
+*      wis_extract-zz_wecacr2 = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_wecacr2.
+*    ENDIF.
+*
+**&- ZZ_WECACR3
+*    IF wis_extract-zz_wecacr3 EQ 't' OR wis_extract-zz_wecacr3 EQ 'X'. "True
+*      wis_extract-zz_wecacr3 = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_wecacr3.
+*    ENDIF.
+*
+**&- ZZ_WECACR4
+*    IF wis_extract-zz_wecacr4 EQ 't' OR wis_extract-zz_wecacr4 EQ 'X'. "True
+*      wis_extract-zz_wecacr4 = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_wecacr4.
+*    ENDIF.
+*
+**&- ZZ_WECACR5
+*    IF wis_extract-zz_wecacr5 EQ 't' OR wis_extract-zz_wecacr5 EQ 'X'. "True
+*      wis_extract-zz_wecacr5 = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_wecacr5.
+*    ENDIF.
+*
+**&- ZZ_WECACR6
+*    IF wis_extract-zz_wecacr6 EQ 't' OR wis_extract-zz_wecacr6 EQ 'X'. "True
+*      wis_extract-zz_wecacr6 = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_wecacr6.
+*    ENDIF.
+*
+**&- FSTTRK
+*    IF wis_extract-zz_fsttrk EQ 't' OR wis_extract-zz_fsttrk EQ 'X'. "True
+*      wis_extract-zz_fsttrk = 'X'.
+*    ELSE.
+*      CLEAR wis_extract-zz_fsttrk.
+*    ENDIF.
+*
+*
+**&-Détails matières éco-resp
+*    IF wis_extract-zz_dwecacr1 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_wecare1 INTO @DATA(wls_wecare1) WHERE zdetwc1 = @wis_extract-zz_dwecacr1.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Matière éco responsable { wis_extract-zz_dwecacr1 } n’existe pas dans ZART_WECARE1|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-Détails procédé éco-resp
+*    IF wis_extract-zz_dwecacr2 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_wecare2 INTO @DATA(wls_wecare2) WHERE zdetwc2 = @wis_extract-zz_dwecacr2.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Procédé éco-resp { wis_extract-zz_dwecacr1 } n’existe pas dans ZART_WECARE2|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-Détails prod solidaire
+*    IF wis_extract-zz_dwecacr3 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_wecare3 INTO @DATA(wls_wecare3) WHERE zdetwc3 = @wis_extract-zz_dwecacr3.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Production solidaire { wis_extract-zz_dwecacr3 } n’existe pas dans ZART_WECARE3|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-Détails durabilité
+*    IF wis_extract-zz_dwecacr4 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_wecare4 INTO @DATA(wls_wecare4) WHERE zdetwc4 = @wis_extract-zz_dwecacr4.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Durabilité { wis_extract-zz_dwecacr4 } n’existe pas dans ZART_WECARE4|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-Détails upcycling
+*    IF wis_extract-zz_dwecacr5 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_wecare5 INTO @DATA(wls_wecare5) WHERE zdetwc5 = @wis_extract-zz_dwecacr5.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Upcycling { wis_extract-zz_dwecacr5 } n’existe pas dans ZART_WECARE5|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-Détails prod locale
+*    IF wis_extract-zz_dwecacr6 IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_wecare6 INTO @DATA(wls_wecare6) WHERE zdetwc6 = @wis_extract-zz_dwecacr6.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Production locale { wis_extract-zz_dwecacr6 } n’existe pas dans ZART_WECARE6|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-Degré de mode
+*    IF wis_extract-fashgrd IS NOT INITIAL.
+*      SELECT SINGLE * FROM t6wfg INTO @DATA(wls_fashgrd) WHERE fashgrd = @wis_extract-fashgrd.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Degré de mode { wis_extract-fashgrd } n’existe pas dans T6WFG|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-Gamme de prix
+*    IF wis_extract-plgtp IS NOT INITIAL.
+*      SELECT SINGLE * FROM twptt INTO @DATA(wls_twptt) WHERE plgtp = @wis_extract-plgtp.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Gamme de prix { wis_extract-plgtp } n’existe pas dans TWPTT|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*
+**&-Type de track
+*    IF wis_extract-zz_typtrk IS NOT INITIAL.
+*      SELECT SINGLE * FROM zart_track INTO @DATA(wls_track) WHERE ztyptrk = @wis_extract-zz_typtrk.
+*      IF sy-subrc <> 0.
+*        wev_return = sy-subrc.
+*        ADD 1 TO wlv_number.
+*        wlv_message = |Type de track { wis_extract-zz_typtrk } n’existe pas dans ZART_TRACK|.
+*        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+*      ENDIF.
+*    ENDIF.
+*  ELSE.
+* Begin Insert RZE RICEF-100
+* Vérifier que les champs récupérer sont bien renseignés et non vide car obligatoire
+  "IDPLM_MC
+  IF wis_extract-idplm_mc IS INITIAL.
+    wev_return = 4.
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'ID PLM du MC obligatoire'.
+  ELSE.
+    "TRIBU
+    IF wis_extract-tribu IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Tribu obligatoire'.
+    ENDIF.
+    "MATKL
+    IF wis_extract-matkl IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Groupe marchandise obligatoire'.
+    ELSE.
+      wlv_matkl = wis_extract-matkl.
+      SELECT SINGLE * FROM t023 INTO wls_t023 WHERE matkl = wlv_matkl.
+      IF sy-subrc <> 0.
+        wev_return = sy-subrc.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Groupe de Marchandise n’existe pas'.
+      ENDIF.
+    ENDIF.
+    "MAKTX
+    IF wis_extract-maktx IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Libellé modele obligatoire'.
+    ENDIF.
+    "IDPLM_MODL
+    IF wis_extract-idplm_modl IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'ID PLM modèle obligatoire'.
+    ENDIF.
+    "COLOR_SAP
+    IF wis_extract-color_sap IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Code couleur obligatoire'.
+    ELSE.
+      wlv_color_sap = wis_extract-color_sap.
+      wlv_ekorg = wis_extract-ekorg.
+      wlv_saisj = wis_extract-saisj.
+
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = wis_extract-saiso
+        IMPORTING
+          output = wlv_saiso.
+
+      SELECT SINGLE * FROM zpari_adm_color INTO wls_adm_color WHERE ekorg = wlv_ekorg AND saiso = wlv_saiso AND saisj = wlv_saisj AND color_sap = wlv_color_sap.
+      IF sy-subrc <> 0.
+        wev_return = sy-subrc.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'COLOR n’existe pas dans SAP'.
+      ENDIF.
+
+      wis_extract-timestamp_tech = |{ sy-datum }{ sy-uzeit }|.
+
+      IF wev_return IS INITIAL OR wev_return = '2'.
+        wis_extract-statut_tech = 0.
+      ELSE.
+        wis_extract-statut_tech = wev_return.
+      ENDIF.
+    ENDIF.
+    "ZZ_PRSA
+    IF wis_extract-zz_prsa IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Instore obligatoire'.
+    ENDIF.
+    "SAITY
+    IF wis_extract-saity IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Collection obligatoire'.
+    ELSE.
+      wlv_saity = wis_extract-saity.
+      wlv_saiso = wis_extract-saiso.
+      wlv_saisj = wis_extract-saisj.
+
+      CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+        EXPORTING
+          input  = wis_extract-saiso
+        IMPORTING
+          output = wlv_saiso.
+
+      SELECT SINGLE * FROM twsai INTO wls_twsai WHERE saity = wlv_saity AND kjahr = wlv_saisj AND saiso = wlv_saiso.
+      IF sy-subrc <> 0.
+        wev_return = 2.
+        ADD 1 TO wlv_number.
+        CLEAR wlv_message.
+        wlv_message = |Le code collection n’existe pas dans la saison { wlv_saiso }/{ wlv_saisj }|.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return wlv_message.
+      ENDIF.
+    ENDIF.
+    "MATNR
+    IF wis_extract-mcrec = 'X'.
+      IF wis_extract-matnr IS INITIAL.
+        wev_return = 4.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Code SAP article obligatoire'.
+      ENDIF.
+    ENDIF.
+    "GRILLET
+    IF wis_extract-grillet IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Grille de taille obligatoire'.
+    ENDIF.
+    "PRILA
+    IF wis_extract-prila IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Prix de lancement obligatoire'.
+    ENDIF.
+    "WAERS
+    IF wis_extract-waers IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Devise prix de lancement obligatoire'.
+    ENDIF.
+    "LAYGR
+    IF wis_extract-laygr IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Module de linéaire obligatoire'.
+    ELSE.
+      wlv_laygr = wis_extract-laygr.
+      SELECT SINGLE * FROM twml INTO wls_twml WHERE laygr = wlv_laygr .
+      IF sy-subrc <> 0 OR wlv_laygr IS INITIAL.
+        IF wlv_laygr(2) EQ 'ZL' OR wlv_laygr(2) CA 'EL'.
+          CLEAR: wls_twml, wls_twmlt, wlv_error_api.
+          "TWML
+          wls_twmlt-laygr = wls_twml-laygr = wlv_laygr.
+          wls_twml-up_date = sy-datum.
+          wls_twml-up_time = sy-uzeit.
+          wls_twml-last_used_vers = '0000'.
+
+          "TMWLT
+          wls_twmlt-laygr = wlv_laygr.
+          wls_twmlt-spras = 'FR'.
+          PERFORM call_api_plm_module_lineaire USING wis_extract-laygr CHANGING wls_twmlt-ltext wlv_error_api.
+
+          IF wls_twmlt-ltext IS INITIAL.
+            wev_return = '4'.
+            ADD 1 TO wlv_number.
+            PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Le module linéaire n’existe pas'.
+          ELSE.
+            INSERT twml FROM wls_twml.
+            IF sy-subrc = 0.
+              INSERT twmlt FROM wls_twmlt.
+              IF sy-subrc = 0.
+                DATA lt_laygr TYPE laymod_table.
+                DATA lt_wlmv TYPE TABLE OF wlmv.
+                REFRESH lt_laygr.
+                APPEND INITIAL LINE TO lt_laygr ASSIGNING FIELD-SYMBOL(<ls_laygr>).
+                <ls_laygr>-laygr = wlv_laygr.
+
+                CALL FUNCTION 'WRF_WLMV_ARRAY_READ_ALL_VERS'
+                  EXPORTING
+                    kzrfb            = 'X'
+                  TABLES
+                    t_laymod         = lt_laygr
+                    t_laymod_version = lt_wlmv.
+                "création du change pointeur
+                PERFORM create_change_pointer USING wlv_laygr.
+              ENDIF.
+            ENDIF.
+          ENDIF.
+        ELSE.
+          wev_return = '4'.
+          ADD 1 TO wlv_number.
+          PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Le module linéaire n’existe pas'.
+        ENDIF.
+
+* DEB INS ABAP-2512 MSA
+      ELSE.
+
+        DATA: wlv_libelle_plm TYPE lm_bez_40.
+
+        CLEAR: wls_twmlt, wlv_error_api, wlv_libelle_plm.
+
+        "Libellé actuel SAP
+        SELECT SINGLE * FROM twmlt INTO wls_twmlt WHERE laygr = wlv_laygr AND spras = 'FR'.
+
+        "Libellé venant du PLM
+        PERFORM call_api_plm_module_lineaire USING wis_extract-laygr CHANGING wlv_libelle_plm wlv_error_api.
+
+        "Comparaison
+        IF wlv_libelle_plm IS NOT INITIAL AND wlv_libelle_plm <> wls_twmlt-ltext.
+
+          wls_twmlt-ltext = wlv_libelle_plm.
+
+          UPDATE twmlt FROM wls_twmlt.
+
+        ENDIF.
+
+*    ENDIF.
+* END INS ABAP-2512 MSA
+      ENDIF.
+
+    ENDIF.
+    "LIBCOOR
+
+    IF wis_extract-libcoor IS INITIAL.
+
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Coordonnée obligatoire'.
+    ELSE.
+      CONCATENATE '999/999' wis_extract-libcoor INTO wlv_zz_coor SEPARATED BY space.
+*  wlv_zz_coor =  wis_extract-libcoor.
+
+      SELECT SINGLE * FROM zartcoordonnee INTO wls_zartcoordonnee
+                      WHERE zz_lib = wlv_zz_coor.
+
+
+      IF sy-subrc <> 0.
+
+*&- s'il existe pas, on le crée
+        SUBMIT z_specifcoor
+          WITH p_org EQ wis_extract-ekorg
+         WITH p_text EQ wis_extract-libcoor
+          WITH p_plm = 'X'
+          AND RETURN.
+*
+
+*&- recheck après création
+        SELECT SINGLE * FROM zartcoordonnee INTO wls_zartcoordonnee
+                       WHERE zz_lib = wlv_zz_coor.
+
+        IF sy-subrc <> 0.
+          wev_return = 2.
+          ADD 1 TO wlv_number.
+          PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Coordonné n''existe pas '.
+        ENDIF.
+
+      ENDIF.
+    ENDIF.
+    "ZZ_CRI1
+    IF wis_extract-zz_cri1 IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Forme 1 obligatoire'.
+    ELSE.
+      wlv_cri1 = wis_extract-zz_cri1.
+      SELECT SINGLE * FROM zartcritere1 INTO wls_zartcritere1 WHERE zz_cri1 = wlv_cri1 AND langu = sy-langu AND zinactif = ''.
+      IF sy-subrc <> 0.
+        wev_return = sy-subrc.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'La forme  n’existe pas'.
+      ENDIF.
+    ENDIF.
+    "BRGEW
+    IF wis_extract-brgew IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Poids brut obligatoire'.
+    ENDIF.
+    "ZZ_TPIM
+    IF wis_extract-zz_tpim IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Type d import obligatoire'.
+    ENDIF.
+    "SSTUF
+    IF wis_extract-sstuf IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Niveau de gamme obligatoire'.
+    ELSE.
+      wlv_sstuf = wis_extract-sstuf.
+      SELECT SINGLE * FROM twss INTO wls_twss WHERE sstuf = wlv_sstuf .
+      IF sy-subrc <> 0.
+        wev_return = sy-subrc.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'NG n’existe pas dans SAP'.
+      ENDIF.
+    ENDIF.
+    "ZZ_REPA
+    IF wis_extract-zz_repa IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Répartition 1 obligatoire'.
+    ELSE.
+      wlv_repa = wis_extract-zz_repa.
+      SELECT SINGLE * FROM zartrepartition INTO wls_zartrepart WHERE zz_repa = wlv_repa AND zinactif = ''.
+      IF sy-subrc <> 0.
+        wev_return = sy-subrc.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc 'Code répartition n’existe pas dans SAP'.
+      ENDIF.
+    ENDIF.
+    "ZZ_UNIV1
+    IF wis_extract-ekorg = 'ELIN'.
+      IF wis_extract-zz_univ1 IS INITIAL.
+        wev_return = 4.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Univers 1 obligatoire'.
+      ELSE.
+        IF wis_extract-zz_univ1 IS NOT INITIAL .
+          SELECT SINGLE * FROM zartuniv1 INTO @DATA(wls_univer) WHERE zz_univ1 = @wis_extract-zz_univ1.
+          IF sy-subrc <> 0.
+            wev_return = sy-subrc.
+            ADD 1 TO wlv_number.
+            wlv_message = |Univers1 { wis_extract-zz_univ1 } n’existe pas dans ZARTUNIV1|.
+            PERFORM addlog USING wis_extract-idplm_mc wlv_number sy-subrc wlv_message.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+    ENDIF.
+    "TAIMAX
+    IF wis_extract-taimaxmc IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Taille max mc obligatoire'.
+    ENDIF.
+    "TAIMIN
+    IF wis_extract-taiminmc IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Taille min mc obligatoire'.
+    ENDIF.
+    IF wis_extract-grillet EQ 'T30A'.
+      "VARMAX
+      IF wis_extract-varmaxmc IS INITIAL.
+        wev_return = 4.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Variante max mc obligatoire'.
+      ENDIF.
+      "VARMIN
+      IF wis_extract-varminmc IS INITIAL.
+        wev_return = 4.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Variante min mc obligatoire'.
+      ENDIF.
+      "TAIVAR
+*      IF wis_extract-taimax IS NOT INITIAL AND wis_extract-taimin IS NOT INITIAL
+*        AND wis_extract-varmax IS NOT INITIAL AND wis_extract-varmin IS NOT INITIAL.
+*        CLEAR : lv_vartai, lv_cnt.
+*        lv_vartai = wis_extract-taimin.
+*        FIND FIRST OCCURRENCE OF wis_extract-varmax IN sy-abcde MATCH OFFSET lv_cnt.
+*
+*        WHILE lv_vartai <= wis_extract-taimax.
+*          DO lv_cnt TIMES.
+*            CONCATENATE wis_extract-taivar '-' lv_vartai sy-abcde+lv_cnt(1) INTO wis_extract-taivar.
+*          ENDDO.
+*          lv_vartai = lv_vartai + 5.
+*        ENDWHILE.
+*        SHIFT wis_extract-taivar BY 1 PLACES LEFT IN CHARACTER MODE.
+*      ELSE.
+      IF wis_extract-taivarmc IS INITIAL.
+        wev_return = 4.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Matrice des tailles variantes mc obligatoire'.
+      ENDIF.
+    ENDIF.
+    "GEWEI
+    IF wis_extract-gewei IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Unité de poids'.
+    ENDIF.
+    "ZZ_GENRE
+    IF wis_extract-zz_genre IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Genre'.
+    ENDIF.
+*    "COEURCO N'est plus obligatoire
+*    IF wis_extract-coeurco IS INITIAL.
+*      wev_return = 4.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Cœur de collection'.
+*    ENDIF.
+    "MEINS
+    IF wis_extract-meins IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Unité de quantité'.
+    ENDIF.
+    "MTART
+    IF wis_extract-mtart IS INITIAL.
+      wev_return = 4.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING wis_extract-idplm_mc wlv_number wev_return 'Type d''article'.
+    ENDIF.
+
+    wis_extract-timestamp_tech = |{ sy-datum }{ sy-uzeit }|.
+
+    IF wev_return IS INITIAL OR wev_return = '2'.
+      wis_extract-statut_tech = 0.
+    ELSE.
+      wis_extract-statut_tech = wev_return.
+    ENDIF.
+
+  ENDIF.
+* End Insert RZE RICEF-100
+*  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  ADDLOG
+*&---------------------------------------------------------------------*
+FORM addlog  USING    wiv_idplm_mc  TYPE char18
+                      wiv_number    TYPE int1
+                      wiv_subrc     TYPE sy-subrc
+                      wiv_message   TYPE text150.
+
+
+  DATA : wls_log TYPE zplm_log.
+
+  wls_log-mandt = sy-mandt.
+  wls_log-idplm_mc = wiv_idplm_mc.
+  wls_log-line_return = wiv_number.
+  wls_log-code_return = wiv_subrc.
+  wls_log-message = wiv_message.
+  wls_log-timestamp = |{ sy-datum }{ sy-uzeit }|.
+
+  APPEND wls_log TO wgt_log.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SAVE_LOG
+*&---------------------------------------------------------------------*
+FORM save_log USING wiv_commit TYPE flag.
+
+  DATA : wls_log       LIKE LINE OF wgt_log,
+         wlr_idplm_mc  TYPE RANGE OF char18,
+         wlrs_idplm_mc LIKE LINE OF wlr_idplm_mc.
+
+  wlrs_idplm_mc = 'IEQ'.
+  LOOP AT wgt_log INTO wls_log.
+    wlrs_idplm_mc-low = wls_log-idplm_mc.
+    APPEND wlrs_idplm_mc TO wlr_idplm_mc.
+  ENDLOOP.
+
+  CHECK wlr_idplm_mc IS NOT INITIAL.
+
+  DELETE FROM zplm_log WHERE idplm_mc IN wlr_idplm_mc.
+
+  MODIFY zplm_log FROM TABLE wgt_log.
+
+  IF wiv_commit IS NOT INITIAL.
+    COMMIT WORK AND WAIT.
+  ENDIF.
+
+  REFRESH wgt_log.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  INTEG_PARI
+*&---------------------------------------------------------------------*
+FORM integ_pari  TABLES wit_extract STRUCTURE zplm_files_load.
+
+  DATA : wlv_statut_mdl TYPE char1,
+         wlv_statut_mc  TYPE char1.
+
+  DATA :  wlv_number TYPE int1.
+
+  DATA : wlt_zpari_mcv     TYPE STANDARD TABLE OF zpari_mcv,
+         wlt_zpari_mcv_pay TYPE STANDARD TABLE OF zpari_mcv_pay.
+
+  DATA : wls_zpari_modl  TYPE zpari_modl,
+         wls_zpari_modlt TYPE zpari_modlt,
+         wls_zpari_mc    TYPE zpari_mc.
+
+  DATA : wls_licence     TYPE zartlicence,
+         wlv_new_licence TYPE flag.
+
+  DATA : wlv_basnr TYPE zbasnr,
+         wlv_error TYPE flag.
+
+  DATA : wlv_error_message TYPE text150.
+
+  DATA : wlt_modl_compo TYPE TABLE OF zpari_modl_compo,
+         wlt_mc_compo   TYPE TABLE OF zpari_mc_compo.
+
+  DATA: lt_mat_upd_data TYPE zcl_master_data_article_plm=>tt_pari_base_model.
+  DATA: ls_mat_upd_data TYPE zpari_mat_upd.
+
+  DATA: lv_recond TYPE zrecond_maj. "+ ABAP-389
+
+
+  DATA : wls_mc         TYPE zpari_mc,
+         wlc_select(12) TYPE c VALUE 'SELECTIONNE',
+         wls_decis      TYPE zpari_decision,
+         wlt_decision   TYPE TABLE OF zpari_decision,
+         wlt_adm_pays   TYPE TABLE OF zpari_adm_pays,
+         wls_adm_pays   TYPE zpari_adm_pays.
+
+  "+mal hier article
+  DATA: lt_mat_hier_posting TYPE zzt_hier_posting.
+
+  CONSTANTS : wlc_stawn TYPE maw1-wstaw VALUE '99999998'.
+
+  FIELD-SYMBOLS: <wlf_extract> TYPE zplm_files_load.
+
+  LOOP AT wit_extract ASSIGNING <wlf_extract>.
+
+    CLEAR : wlv_statut_mdl, wlv_statut_mc, wlv_number,wlv_basnr,wls_zpari_modl,wls_zpari_modlt,wlv_new_licence,wls_licence,wls_zpari_mc,wlv_error,wlv_basnr.
+    REFRESH : wlt_modl_compo,wlt_mc_compo.
+
+
+*   On determine le numero de base
+    PERFORM get_base USING <wlf_extract>-saiso <wlf_extract>-saisj <wlf_extract>-ekorg <wlf_extract>-tribu
+                    CHANGING wlv_basnr wlv_error lv_recond. "+ ABAP-389
+    IF wlv_error IS NOT INITIAL.
+      <wlf_extract>-statut_tech = '4'.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING <wlf_extract>-idplm_mc wlv_number '4' 'Impossible de déterminer la base'.
+    ENDIF.
+
+*   On determine le statut du modele et du mc
+    PERFORM get_statut USING <wlf_extract> 'MDL' wlv_basnr CHANGING wlv_statut_mdl.
+    PERFORM get_statut USING <wlf_extract> 'MC' wlv_basnr CHANGING wlv_statut_mc.
+
+    IF wlv_statut_mdl = 'E' OR wlv_statut_mc = 'E'.
+      <wlf_extract>-statut_tech = '4'.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING <wlf_extract>-idplm_mc wlv_number '4' 'Statut impossible à déterminer'.
+    ENDIF.
+
+
+    IF <wlf_extract>-statut_tech = 0.
+
+      IF      wlv_statut_mdl = 'C' AND wlv_statut_mc = 'C'. " mdl et mc en création
+
+        PERFORM cc TABLES wlt_modl_compo wlt_mc_compo CHANGING wlv_basnr <wlf_extract> wls_zpari_modl wls_zpari_modlt wlv_new_licence wls_licence wls_zpari_mc.
+
+      ELSEIF  wlv_statut_mdl = 'C' AND wlv_statut_mc = 'M'." mdl en création et mc en modification - pas de cas possible normalement
+
+        <wlf_extract>-statut_tech = '4'.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING <wlf_extract>-idplm_mc wlv_number '4' 'Cas C-M interdit'.
+
+      ELSEIF  wlv_statut_mdl = 'C' AND wlv_statut_mc = 'R'." mdl en création et mc en reconduit - pas de cas possible normalement
+
+        <wlf_extract>-statut_tech = '4'.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING <wlf_extract>-idplm_mc wlv_number '4' 'Cas C-R interdit'.
+
+      ELSEIF  wlv_statut_mdl = 'M' AND wlv_statut_mc = 'C'." mdl en modification et mc en création
+
+        PERFORM mc TABLES wlt_modl_compo wlt_mc_compo CHANGING wlv_basnr <wlf_extract> wls_zpari_modl wls_zpari_modlt wlv_new_licence wls_licence wls_zpari_mc.
+
+      ELSEIF  wlv_statut_mdl = 'M' AND wlv_statut_mc = 'M'." mdl en modification et mc en modification
+
+        PERFORM mm TABLES wlt_modl_compo wlt_mc_compo CHANGING wlv_basnr <wlf_extract> wls_zpari_modl wls_zpari_modlt wlv_new_licence wls_licence wls_zpari_mc.
+
+      ELSEIF  wlv_statut_mdl = 'M' AND wlv_statut_mc = 'R'." mdl en modification et mc en reconduit
+
+        PERFORM mr TABLES wlt_modl_compo wlt_mc_compo CHANGING wlv_basnr <wlf_extract> wls_zpari_modl wls_zpari_modlt wlv_new_licence wls_licence wls_zpari_mc.
+
+      ELSEIF  wlv_statut_mdl = 'R' AND wlv_statut_mc = 'C'." mdl en reconduit et mc en création
+
+        PERFORM rc TABLES wlt_modl_compo wlt_mc_compo CHANGING wlv_basnr <wlf_extract> wls_zpari_modl wls_zpari_modlt wlv_new_licence wls_licence wls_zpari_mc.
+
+      ELSEIF  wlv_statut_mdl = 'R' AND wlv_statut_mc = 'M'." mdl en reconduit et mc en modification - pas de cas possible normalement
+
+        <wlf_extract>-statut_tech = '4'.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING <wlf_extract>-idplm_mc wlv_number '4' 'Cas R-M interdit'.
+
+      ELSEIF  wlv_statut_mdl = 'R' AND wlv_statut_mc = 'R'." mdl en reconduit et mc en reconduit
+
+        PERFORM rr TABLES wlt_modl_compo wlt_mc_compo CHANGING wlv_basnr <wlf_extract> wls_zpari_modl wls_zpari_modlt wlv_new_licence wls_licence wls_zpari_mc.
+
+      ELSE. " cas non prévu
+
+        <wlf_extract>-statut_tech = '4'.
+        ADD 1 TO wlv_number.
+        PERFORM addlog USING <wlf_extract>-idplm_mc wlv_number '4' 'Cas inconnu'.
+
+      ENDIF.
+
+    ENDIF.
+
+    IF <wlf_extract>-statut_tech = 0.
+
+* BEGIN INSERT RZE 28/04/2023 RICEF-100
+* Gestion de la matrice de taille "TAIVAR" dans le cas de soutien gorge
+      IF <wlf_extract>-taivarmc IS NOT INITIAL AND <wlf_extract>-grillet EQ 'T30A'.
+        CLEAR : wlt_zpari_mcv[], wlt_zpari_mcv_pay[].
+        PERFORM recup_taivar USING wlv_basnr wls_zpari_modl-mdlnr wls_zpari_mc-color <wlf_extract> CHANGING wlt_zpari_mcv wlt_zpari_mcv_pay.
+
+        MODIFY zpari_mcv FROM TABLE wlt_zpari_mcv.
+        MODIFY zpari_mcv_pay FROM TABLE wlt_zpari_mcv_pay.
+      ENDIF.
+* Récupérer l'article de référence à partir du groupe de marchandise
+      SELECT SINGLE wwgda FROM t023
+                          INTO @DATA(wlv_matnr)
+                          WHERE matkl = @<wlf_extract>-matkl.
+      IF sy-subrc = 0 AND wlv_matnr IS NOT INITIAL.
+        " Récupération de la hiérarchie de produit
+        SELECT SINGLE prdha FROM  mara
+                            INTO  wls_zpari_modl-prdha
+                            WHERE matnr = wlv_matnr.
+      ENDIF.
+
+      IF <wlf_extract>-matnr IS NOT INITIAL
+         AND NOT ( wlv_statut_mdl = 'M' AND wlv_statut_mc = 'M' )."+ABAP-1983 BOUATTOH 30/10/2025
+        " Récupération de la nomenclature douanière à partir de l'article
+        SELECT SINGLE wstaw FROM maw1
+                            INTO @DATA(wlv_wstaw)
+                            WHERE matnr = @<wlf_extract>-matnr.
+
+        IF sy-subrc = 0 AND wlv_wstaw IS NOT INITIAL.
+          wls_zpari_modl-stawn = wlv_wstaw.
+        ENDIF.
+      ENDIF.
+
+      IF wls_zpari_modl-stawn IS INITIAL AND wlv_matnr IS NOT INITIAL.
+        " Récupération de la nomenclature douanière à partir de l'article de référence
+        SELECT SINGLE wstaw FROM maw1
+                            INTO wlv_wstaw
+                            WHERE matnr = wlv_matnr.
+        IF sy-subrc = 0 AND wlv_wstaw IS NOT INITIAL.
+          wls_zpari_modl-stawn = wlv_wstaw.
+        ENDIF.
+      ENDIF.
+
+      IF wls_zpari_modl-stawn IS INITIAL.
+        " Affecter une valeur fixe 99999998 à la nomenclature douanière si vide
+        wls_zpari_modl-stawn = wlc_stawn.
+      ENDIF.
+
+      "S'assurer qu'on récupère bien les champs dans MC à partir du modèle
+      IF wls_zpari_mc-zz_enla IS INITIAL.
+        wls_zpari_mc-zz_enla = wls_zpari_modl-zz_enla.
+      ENDIF.
+
+      IF wls_zpari_mc-zz_enre IS INITIAL.
+        wls_zpari_mc-zz_enre = wls_zpari_modl-zz_enre.
+      ENDIF.
+
+      IF wls_zpari_mc-zz_enjv IS INITIAL.
+        wls_zpari_mc-zz_enjv = wls_zpari_modl-zz_enjv.
+      ENDIF.
+
+      IF wls_zpari_mc-zz_enad IS INITIAL.
+        wls_zpari_mc-zz_enad = wls_zpari_modl-zz_enad.
+      ENDIF.
+
+      IF wls_zpari_mc-zz_enst IS INITIAL.
+        wls_zpari_mc-zz_enst = wls_zpari_modl-zz_enst.
+      ENDIF.
+
+      IF wls_zpari_mc-zz_tpgr IS INITIAL.
+        wls_zpari_mc-zz_tpgr = wls_zpari_modl-zz_tpgr.
+      ENDIF.
+
+      IF wls_zpari_mc-raube IS INITIAL.
+        wls_zpari_mc-raube = wls_zpari_modl-raube.
+      ENDIF.
+
+      IF wls_zpari_mc-stawn IS INITIAL.
+        wls_zpari_mc-stawn = wls_zpari_modl-stawn.
+      ENDIF.
+* DEB DELETE ABAP-2447 MSA  : empêcher d’écraser les valeurs du PLM
+*      IF wls_zpari_mc-zz_tpci IS INITIAL.
+*        wls_zpari_mc-zz_tpci = wls_zpari_modl-zz_tpci.
+*      ENDIF.
+
+* END DELETE ABAP-2447 MSA
+
+*      " Gérer le décalage de numérotation de variante entre PLM et ZPARI
+*      IF wls_zpari_mc-varmin <> 0 AND wls_zpari_mc-varmax <> 0.
+*        wls_zpari_mc-varmin = wls_zpari_mc-varmin + 1.
+*        wls_zpari_mc-varmax = wls_zpari_mc-varmax + 1.
+*      ENDIF.
+* END INSERT RZE 28/04/2023 RICEF-100
+
+      <wlf_extract>-statut_tech = 1.
+      MODIFY zplm_files_load FROM @<wlf_extract>.
+      IF wlv_new_licence IS NOT INITIAL.
+        MODIFY zartlicence FROM @wls_licence.
+      ENDIF.
+      MODIFY zpari_modl FROM @wls_zpari_modl.
+      MODIFY zpari_modlt FROM @wls_zpari_modlt.
+      MODIFY zpari_mc FROM @wls_zpari_mc.
+      MODIFY zpari_modl_compo FROM TABLE wlt_modl_compo.
+      MODIFY zpari_mc_compo FROM TABLE wlt_mc_compo.
+
+      COMMIT WORK AND WAIT.
+
+*AHO - 18.10.2024 - Mise à jour de la table ZPARI_DECISION pour positionnement pays de l'article - Début Modification
+      IF p_mc = 'X'.  " En cas d'integration des articles
+        IF <wlf_extract>-statut = wlc_select . "Statut "Séléctionné
+
+*Récupérer les données Modele MC venant d'etre créé.
+          CLEAR wls_mc.
+          SELECT SINGLE * FROM zpari_mc
+            INTO wls_mc
+            WHERE idplm_mc = <wlf_extract>-idplm_mc.
+
+          IF sy-subrc = 0.
+
+            SELECT SINGLE COUNT(*) FROM zpari_decision INTO sy-dbcnt
+              WHERE basnr = wls_mc-basnr
+                AND mdlnr = wls_mc-mdlnr
+                AND color = wls_mc-color.
+            IF sy-subrc <> 0.
+
+*Récupérer les Pays pour positionnement
+              SELECT * FROM zpari_adm_pays INTO TABLE wlt_adm_pays
+          WHERE ekorg = <wlf_extract>-ekorg
+            AND saiso = <wlf_extract>-saiso
+            AND saisj = <wlf_extract>-saisj
+            AND land1 <> <wlf_extract>-landc.
+
+
+              LOOP AT wlt_adm_pays INTO wls_adm_pays.
+*Créer une ligne Décision pour chaque pays
+
+                MOVE-CORRESPONDING  wls_mc TO wls_decis.
+                wls_decis-land1    = wls_adm_pays-land1.
+                wls_decis-erdat    = sy-datum.
+                wls_decis-ernam    = sy-uname.
+                wls_decis-decision = ''.
+                APPEND wls_decis TO wlt_decision.
+              ENDLOOP.
+
+              IF NOT wlt_decision IS INITIAL.
+                MODIFY zpari_decision FROM TABLE wlt_decision.
+                COMMIT WORK .
+              ENDIF.
+            ENDIF.
+          ENDIF.
+
+        ENDIF.
+      ENDIF.
+*AHO - 18.10.2024 - Fin Modification
+
+      " +Début ABAP-388
+      IF sy-subrc EQ 0.
+
+        IF zcl_bascule=>is_active( iv_activity = 'ZPARI_DECOM' iv_value = <wlf_extract>-ekorg ).
+
+          " vérifier si statut complet avant intégration standard
+          zcl_master_data_article_plm=>check_material_update( EXPORTING
+                                                                iv_basnr = wlv_basnr
+                                                                iv_mdlnr = wls_zpari_modl-mdlnr
+                                                              IMPORTING
+                                                                ev_journalnr = DATA(lv_journalnr)
+                                                                ev_update_ok = DATA(lv_update_ok) ).
+
+          DATA(lv_stcompl) = COND #( WHEN lv_update_ok EQ abap_true THEN '2' ELSE '3' ).
+          DATA(lv_stcrea) =  COND #( WHEN ( wls_zpari_modl-mcrec EQ abap_true AND lv_recond EQ abap_false ) THEN ' ' ELSE '1' ).
+
+
+          " Cas special : Base non basculée, Modèle reconduit, MC reconduit => pas de maj du standard, maj pari uniquement
+          IF ( lv_recond EQ abap_false AND wls_zpari_modl-mcrec EQ abap_true AND wls_zpari_mc-mcrec EQ abap_true )
+            OR lv_update_ok EQ abap_false.
+
+            DATA(ls_mat_upd) = VALUE zpari_mat_upd( basnr = wls_zpari_modl-basnr mdlnr = wls_zpari_modl-mdlnr
+                                                    stcrea = lv_stcrea  stcompl = lv_stcompl tech_compl = lv_journalnr ).
+            MODIFY zpari_mat_upd FROM ls_mat_upd.
+            COMMIT WORK AND WAIT.
+
+          ENDIF.
+
+          "+MAL ABAP-392
+          IF wls_zpari_modl-mcrec EQ abap_true AND wls_zpari_mc-mcrec EQ abap_true.
+
+*            SELECT SINGLE saisj,saiso,saity FROM mara
+*              WHERE matnr = @wls_zpari_modl-matnr
+*              INTO (@DATA(lv_saisj_past),@DATA(lv_saiso_past),@DATA(lv_saity_past)).
+
+            lt_mat_hier_posting = VALUE #( BASE lt_mat_hier_posting ( matnr = wls_zpari_modl-matnr
+                          matkl = wls_zpari_modl-matkl
+                          ekorg = wls_extract-ekorg
+                          univ1 = wls_zpari_modl-zz_univ1
+                          recond = 'X'
+                          recond_old_saisj = <wlf_extract>-saisj
+                          recond_old_saiso = <wlf_extract>-saiso
+                          recond_old_saity = 'RE'
+                          ) ).
+
+            "maj hier. article pour modl/mc reconduit
+            DATA(lo_maj_hier) = NEW zcl_hierarchy_material_posting( it_hier_data = lt_mat_hier_posting ).
+            lo_maj_hier->post_material_to_hier( ).
+
+          ENDIF.
+
+          IF lv_update_ok EQ abap_true AND ( lv_stcompl = 2 AND lv_stcrea = 1 ).
+
+            lt_mat_upd_data = VALUE #( BASE lt_mat_upd_data
+                                ( basnr = wls_zpari_modl-basnr
+                                  mdlnr = wls_zpari_modl-mdlnr
+                                  ekorg = <wlf_extract>-ekorg
+                                 ) ).
+
+          ENDIF.
+        ENDIF.
+        " +Fin MAL ABAP-388
+
+      ENDIF.
+*<<<      évolution possible en utilisant module PARI
+
+*      DATA : wls_base_sel       TYPE zpari_base_sel,
+*             wlt_modl_upd       TYPE TABLE OF zspari_modl_upd,
+*             wlt_modlt_upd      TYPE TABLE OF zpari_modlt,
+*             wlt_mc_upd         TYPE TABLE OF zspari_mc_upd,
+*             wlt_modl_compo_upd TYPE TABLE OF zspari_modl_compo_upd,
+*             wlt_mc_compo_upd   TYPE TABLE OF zspari_mc_compo_upd.
+*
+*      PERFORM adapt_table TABLES wlt_modl_compo wlt_mc_compo wlt_modl_upd wlt_modlt_upd wlt_mc_upd wlt_modl_compo_upd wlt_mc_compo_upd
+*        USING wlv_statut_mdl wlv_statut_mc wls_zpari_modl wls_zpari_modlt wls_zpari_mc
+*              CHANGING wls_base_sel.
+*
+*      CALL FUNCTION 'Z_PARI_UPD_MODL'
+*        EXPORTING
+*          wiv_commit         = 'X'
+*          wis_base_sel       = wls_base_sel
+*        TABLES
+*          wit_modl_upd       = wlt_modl_upd
+*          wit_modlt          = wlt_modlt_upd
+*          wit_mc_upd         = wlt_mc_upd
+*          wit_modl_compo_upd = wlt_modl_compo_upd
+*          wit_mc_compo_upd   = wlt_mc_compo_upd.
+*>>>
+
+    ELSE.
+      MODIFY zplm_files_load FROM @<wlf_extract>.
+      PERFORM save_log USING ''.
+      COMMIT WORK AND WAIT.
+    ENDIF.
+
+  ENDLOOP.
+
+  " +Début ABAP-388
+  IF lt_mat_upd_data IS NOT INITIAL.
+
+    DATA(lo_maj_article) = NEW zcl_master_data_article_plm(
+                               it_pari_base_model = lt_mat_upd_data
+                               ).
+
+    lo_maj_article->pari_maj_material_md( ).
+  ENDIF.
+  "  +Fin MAL ABAP-388
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  GET_STATUT
+*&---------------------------------------------------------------------*
+FORM get_statut  USING    wiv_extract TYPE zplm_files_load
+                          wiv_type TYPE char3
+                          wiv_base TYPE zbasnr
+                 CHANGING wev_statut TYPE char1.
+
+  DATA : wls_modl TYPE zpari_modl,
+         wlt_modl TYPE TABLE OF zpari_modl,
+         wls_mc   TYPE zpari_mc,
+         wlt_mc   TYPE TABLE OF zpari_mc.
+
+  DATA : wlv_where TYPE string.
+  DATA : wlv_saiso TYPE saiso,
+         wlv_saisj TYPE saisj.
+
+  DATA : wlv_matnr TYPE matnr.
+
+
+  IF wiv_type = 'MDL'.
+
+    SELECT SINGLE * FROM zpari_modl INTO wls_modl WHERE idplm_modl = wiv_extract-idplm_modl.
+    IF sy-subrc <> 0. "peut-être Création ou Reconduit
+*      IF wiv_extract-matnr IS INITIAL AND wiv_extract-mcrec IS INITIAL. "c'est bon c'est une création, on est sure * RZE 04/05/2023 RICEF-100 --
+      IF wiv_extract-matnr IS INITIAL AND wiv_extract-modlrec IS INITIAL. "c'est bon c'est une création, on est sure * RZE 04/05/2023 RICEF-100 ++
+        wev_statut = 'C'.
+      ELSE."Peut-etre un reconduit
+        IF wiv_extract-matnr IS NOT INITIAL."Peut-etre un reconduit
+          SELECT SINGLE * FROM zpari_modl INTO wls_modl
+            WHERE idplm_modl = wiv_extract-idplm_modl
+            AND basnr = wiv_base.
+          IF sy-subrc <> 0.
+            CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+              EXPORTING
+                input  = wiv_extract-matnr
+              IMPORTING
+                output = wlv_matnr.
+
+            SELECT * FROM zpari_modl INTO TABLE wlt_modl WHERE matnr = wlv_matnr AND basnr <> wiv_base ORDER BY basnr DESCENDING.
+            READ TABLE wlt_modl INTO wls_modl INDEX 1.
+            SELECT SINGLE saiso saisj FROM zpari_base INTO (wlv_saiso,wlv_saisj) WHERE basnr = wls_modl-basnr.
+            IF    sy-subrc = 0 AND
+                  ( ( wlv_saisj < wiv_extract-saisj ) OR ( wlv_saisj = wiv_extract-saisj AND wlv_saiso < wiv_extract-saiso ) ) AND
+*                  wiv_extract-mcrec IS NOT INITIAL AND
+                  wlv_matnr = wls_modl-matnr."c'est bon c'est un reconduit, on est sure
+              wev_statut = 'R'.
+            ELSE. "C'est la merde, c'est une erreur
+              wev_statut = 'E'.
+            ENDIF.
+          ELSE."C'est la merde, c'est une erreur
+            wev_statut = 'E'.
+          ENDIF.
+        ELSE."C'est la merde, c'est une erreur
+          wev_statut = 'E'.
+        ENDIF.
+      ENDIF.
+    ELSE. " peut-être modif
+      IF wiv_extract-matnr IS NOT INITIAL.
+
+        CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+          EXPORTING
+            input  = wiv_extract-matnr
+          IMPORTING
+            output = wlv_matnr.
+
+        wlv_where = |idplm_modl = wiv_extract-idplm_modl AND basnr = wiv_base AND matnr = wlv_matnr|.
+      ELSE.
+        wlv_where = |idplm_modl = wiv_extract-idplm_modl AND basnr = wiv_base|.
+      ENDIF.
+
+      SELECT SINGLE * FROM zpari_modl INTO wls_modl WHERE (wlv_where).
+      IF sy-subrc = 0. " peut-être une modification
+        wev_statut = 'M'.
+      ELSE." C'est la merde, c'est une erreur
+        wev_statut = 'E'.
+      ENDIF.
+    ENDIF.
+
+  ELSEIF wiv_type = 'MC'.
+
+
+    SELECT SINGLE * FROM zpari_mc INTO wls_mc WHERE idplm_mc = wiv_extract-idplm_mc.
+    IF sy-subrc <> 0. "peut-être Création ou reconduit
+      IF wiv_extract-matnr IS INITIAL AND wiv_extract-mcrec IS INITIAL. "c'est bon c'est une création, on est sure
+        wev_statut = 'C'.
+      ELSE." peut-être reconduit
+        IF wiv_extract-matnr IS NOT INITIAL.
+          CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+            EXPORTING
+              input  = wiv_extract-matnr
+            IMPORTING
+              output = wlv_matnr.
+
+          SELECT * FROM zpari_mc INTO TABLE wlt_mc WHERE matnr = wlv_matnr AND color_sap = wiv_extract-color_sap AND basnr <> wiv_base ORDER BY basnr DESCENDING.
+          IF sy-subrc <> 0.
+            wev_statut = 'C'.
+          ELSE.
+            READ TABLE wlt_mc INTO wls_mc INDEX 1.
+            SELECT SINGLE saiso saisj FROM zpari_base INTO (wlv_saiso,wlv_saisj) WHERE basnr = wls_mc-basnr.
+            IF sy-subrc = 0 AND
+              ( ( wlv_saisj < wiv_extract-saisj ) OR ( wlv_saisj = wiv_extract-saisj AND wlv_saiso < wiv_extract-saiso ) ) AND
+              wiv_extract-mcrec IS NOT INITIAL AND
+              wlv_matnr = wls_mc-matnr AND
+              wiv_extract-color_sap = wls_mc-color_sap. " aprés ça on peut dire que c'est un reconduit
+              wev_statut = 'R'.
+            ELSE. " sinon c'est la merde
+              wev_statut = 'E'.
+            ENDIF.
+          ENDIF.
+        ELSE." sinon c'est la merde
+          wev_statut = 'E'.
+        ENDIF.
+      ENDIF.
+
+    ELSE. " peut-être modif
+
+      SELECT SINGLE * FROM zpari_mc INTO wls_mc WHERE idplm_mc = wiv_extract-idplm_mc AND basnr = wiv_base.
+      IF sy-subrc = 0. " peut-être une modification
+
+*        IF wiv_extract-mcrec IS INITIAL.
+        wev_statut = 'M'.
+*        ELSE.
+*          wev_statut = 'E'.
+*        ENDIF.
+
+      ELSE. " sinon c'est la merde
+        wev_statut = 'E'.
+      ENDIF.
+
+
+    ENDIF.
+
+
+  ENDIF.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CC
+*&---------------------------------------------------------------------*
+FORM cc TABLES wet_modl_compo STRUCTURE zpari_modl_compo
+               wet_mc_compo   STRUCTURE zpari_mc_compo
+        CHANGING wiv_basnr         TYPE zbasnr
+                 wis_extract       TYPE zplm_files_load
+                 wes_zpari_modl    TYPE zpari_modl
+                 wes_zpari_modlt   TYPE zpari_modlt
+                 wev_new_licence   TYPE flag
+                 wes_licence       TYPE zartlicence
+                 wes_zpari_mc      TYPE zpari_mc.
+
+  DATA : wlv_number      TYPE int1.
+  DATA : wls_zartlicence TYPE zartlicence,
+         wgt2_zpari_mc   TYPE TABLE OF zpari_mc.
+  DATA : wlv_error       TYPE flag.
+  DATA : wlv_atnam       TYPE atnam.
+  DATA : wlv_matnr       TYPE matnr.                  "INS RZE ABAP-1571
+
+  FIELD-SYMBOLS : <wlf_modl_compo> TYPE  zpari_modl_compo,
+                  <wlf_mc_compo>   TYPE zpari_mc_compo.
+
+  DATA: wlv_codecol    TYPE zz_colordev,
+        wlv_libcol     TYPE zz_libcoldev,
+        wls_paricoldev TYPE zpari_adm_coldev,
+        wlv_zz_coor    TYPE zz_lib.
+
+******--- On s'occupe du mdl ---********
+*---On déplace toutes les infos du fichier
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modl.
+
+
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_modl-taimax = wis_extract-taimaxmdl.
+  wes_zpari_modl-taimin = wis_extract-taiminmdl.
+* END INSERT RZE RICEF-100 11/07/2023
+
+  PERFORM create_mdlnr CHANGING wes_zpari_modl-mdlnr wlv_error.
+  IF wlv_error IS NOT INITIAL.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Création du MDLNR en erreur'.
+  ENDIF.
+
+  wes_zpari_modl-basnr = wiv_basnr.
+
+*---On va chercher des données dans les tables
+  wlv_atnam = wis_extract-grillet.
+  SELECT SINGLE atinn FROM cabn INTO wes_zpari_modl-grillet WHERE atnam = wlv_atnam.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'GT introuvable'.
+  ENDIF.
+
+  wes_zpari_modl-erdat      = sy-datum.
+  wes_zpari_modl-ernam      = sy-uname.
+
+*---On ajoute aussi des données en dure
+  wes_zpari_modl-mtart        = 'ZHAW'.
+  wes_zpari_modl-meins        = 'ST'.
+  wes_zpari_modl-zz_ucomp1    = 'EXTERIEUR'.
+  wes_zpari_modl-zz_ecomp1    = '00006'.
+  wes_zpari_modl-zz_epou1     = '100'.
+  wes_zpari_modl-oksap        = 'X'.
+
+*---On a quelque subtilitée
+*Pays
+  IF wes_zpari_modl-landc IS INITIAL."Si le pays est vide alors FR
+    wes_zpari_modl-landc = 'FR'.
+  ENDIF.
+*Licence
+  IF wis_extract-licence <> 'True' AND wis_extract-licence <> 'true' ."Si licence a False pas de coche
+    CLEAR wes_zpari_modl-licence.
+  ELSE."Sinon une coche
+    wes_zpari_modl-licence = 'X'.
+
+    SELECT SINGLE * FROM  zartlicence
+                    INTO  wes_licence
+                    WHERE zz_lib = wis_extract-liblicence
+                    AND   langu = 'F'.
+    IF sy-subrc = 0.
+      IF wes_licence-zactif IS INITIAL.
+        wes_licence-zactif = 'X'.
+      ENDIF.
+    ELSE.
+      SELECT MAX( zz_licence ) FROM zartlicence INTO wes_licence-zz_licence.
+      ADD 1 TO wes_licence-zz_licence.
+      wes_licence-mandt = sy-mandt.
+      wes_licence-zz_lib = wis_extract-liblicence.
+      wes_licence-zactif = 'X'.
+      wes_licence-langu = 'F'.
+      TRANSLATE wes_licence-zz_lib TO UPPER CASE.
+      wev_new_licence = 'X'.
+    ENDIF.
+
+    wes_zpari_modl-zz_licence = wes_licence-zz_licence.
+
+  ENDIF.
+
+*&- 05.05.2021: ABO - insertion URL photo
+*  CONCATENATE p_dir_p wis_extract-idplm_modl INTO wes_zpari_modl-photo_pari. "+MAL ABAP-861
+
+  IF wes_zpari_modl-matkl(2) NE 'UP' AND wes_zpari_modl-matkl(4) NE 'ZL19' AND wes_zpari_modl-matkl(4) NE 'ZL20'."A paramétrer dans une table, why not?
+    wes_zpari_modl-zz_rfid = 'X'.
+  ENDIF.
+
+  CONCATENATE '999/999' wis_extract-libcoor INTO wlv_zz_coor SEPARATED BY space.
+
+  SELECT SINGLE * FROM  zartcoordonnee
+                  INTO  @DATA(wls_coord)
+                  WHERE zz_lib = @wlv_zz_coor.
+  IF sy-subrc EQ 0.
+    wes_zpari_modl-zz_coor = wls_coord-zz_coor.
+  ENDIF.
+
+*---On ajoute des données par MF
+  CALL FUNCTION 'Z_PARI_MATKL_GET_REFART_DATA'
+    EXPORTING
+      wiv_matkl       = wes_zpari_modl-matkl
+    TABLES
+      wct_mc          = wgt2_zpari_mc
+    CHANGING
+      wcs_modl        = wes_zpari_modl
+    EXCEPTIONS
+      inexistant      = 1
+      no_artref_found = 2
+      OTHERS          = 3.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Module "Z_PARI_MATKL_GET_REFART_DATA" en erreur'.
+  ENDIF.
+
+*---On n'oubli pas le mal aimé la table de texte
+  "écraser la valeur de mcrec à partir du nouvelle colonne MODLREC
+  wes_zpari_modl-mcrec = wis_extract-modlrec. " RZE 04/05/2023 RICEF-100 ++
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_modlt.
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modlt.
+  wes_zpari_modlt-basnr = wes_zpari_modl-basnr.
+  wes_zpari_modlt-mdlnr = wes_zpari_modl-mdlnr.
+  wes_zpari_modlt-spras = 'F'.
+
+******--- On s'occupe du mc ---********
+
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_mc.
+  MOVE-CORRESPONDING wis_extract    TO wes_zpari_mc.
+
+  wes_zpari_mc-zz_tpci = wis_extract-zz_tpci. " ABAP-2447 MSA
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_mc-taimax = wis_extract-taimaxmc.
+  wes_zpari_mc-taimin = wis_extract-taiminmc.
+  wes_zpari_mc-varmin = wis_extract-varminmc.
+  wes_zpari_mc-varmax = wis_extract-varmaxmc.
+* END INSERT RZE RICEF-100 11/07/2023
+
+*&- DEL by ABO 13.12.2023 - obselete
+*&- 05.05.2021: ABO - insertion URL photo
+*  CONCATENATE p_dir_p wis_extract-idplm_modl INTO wes_zpari_mc-photo_pari.
+
+  IF wes_zpari_modl-matkl(2) NE 'UP' AND wes_zpari_modl-matkl(4) NE 'ZL19' AND wes_zpari_modl-matkl(4) NE 'ZL20'. "a paramétrer dans une table, why not?
+    wes_zpari_mc-zz_rfid = 'X'.
+  ENDIF.
+  IF wls_coord-zz_coor IS NOT INITIAL.
+    wes_zpari_mc-zz_coor = wls_coord-zz_coor.
+  ENDIF.
+
+  wes_zpari_mc-z_perimp = wis_extract-perimpl.
+  wes_zpari_mc-z_regfv  = wis_extract-regfdv.
+  wes_zpari_mc-debimp   = wis_extract-implant.
+  wes_zpari_mc-finimp   = wis_extract-findevie.
+
+  IF wis_extract-z_color IS NOT INITIAL." ABO - code couleur
+
+    CLEAR: wlv_codecol, wlv_libcol, wls_paricoldev.
+
+    SPLIT wis_extract-z_color AT '-' INTO wlv_codecol wlv_libcol.
+
+    wes_zpari_mc-z_color = wlv_codecol.
+
+*&- Check si existe sinon on crée
+    SELECT SINGLE * FROM zpari_adm_coldev INTO wls_paricoldev
+      WHERE ekorg = p_ekorg
+      AND color_dev = wlv_codecol.
+    IF sy-subrc NE 0.
+      wls_paricoldev-ekorg      = p_ekorg.
+      wls_paricoldev-color_dev  = wlv_codecol.
+      wls_paricoldev-lib_coldev  = wlv_libcol.
+      wls_paricoldev-spras      = 'FR'.
+      INSERT zpari_adm_coldev FROM wls_paricoldev.
+
+      wls_paricoldev-spras      = 'EN'.
+      INSERT zpari_adm_coldev FROM wls_paricoldev.
+    ENDIF.
+
+  ENDIF.
+
+  wes_zpari_mc-mdlnr = wes_zpari_modl-mdlnr.
+
+  wes_zpari_mc-erdat = sy-datum.
+  wes_zpari_mc-ernam = sy-uname.
+
+  wes_zpari_mc-zeplm = 'R'.
+  wes_zpari_mc-oksap = 'X'.
+
+  SELECT MAX( color ) FROM zpari_mc INTO wes_zpari_mc-color WHERE mdlnr = wes_zpari_mc-mdlnr.
+  ADD 1 TO wes_zpari_mc-color.
+
+
+  SELECT SINGLE stpar FROM zplm_trsco_statu INTO wes_zpari_mc-statut WHERE stplm = wis_extract-statut.
+  IF sy-subrc <> 0.
+    CLEAR wes_zpari_mc-statut.
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CR
+*&---------------------------------------------------------------------*
+FORM mc  TABLES wet_modl_compo STRUCTURE    zpari_modl_compo
+               wet_mc_compo   STRUCTURE    zpari_mc_compo
+    CHANGING     wiv_basnr         TYPE zbasnr
+                        wis_extract         TYPE zplm_files_load
+                        wes_zpari_modl    TYPE zpari_modl
+                        wes_zpari_modlt   TYPE zpari_modlt
+                        wev_new_licence   TYPE flag
+                        wes_licence       TYPE zartlicence
+                        wes_zpari_mc      TYPE zpari_mc.
+
+  DATA : wlv_number TYPE int1,
+         wlv_mdlnr  TYPE zmdlnr.
+
+  DATA : wls_zartlicence TYPE zartlicence,
+         wgt2_zpari_mc   TYPE TABLE OF zpari_mc.
+
+  DATA : wlt_modl TYPE TABLE OF zpari_modl,
+         wls_modl LIKE LINE OF wlt_modl.
+
+
+  DATA : wlv_pc_modl TYPE land1.
+
+  DATA : wlv_matnr TYPE matnr.
+
+  DATA : wlv_brgew TYPE brgew.
+
+  DATA : wlv_mcrec TYPE zmcrec.
+
+  DATA : wlv_saity TYPE saity.
+
+  DATA: wlv_codecol    TYPE zz_colordev,
+        wlv_libcol     TYPE zz_libcoldev,
+        wls_paricoldev TYPE zpari_adm_coldev,
+        wlv_zz_coor    TYPE zz_lib.
+
+  DATA : wlt_zpari_modl_compo TYPE TABLE OF zpari_modl_compo,
+         wls_zpari_modl_compo TYPE zpari_modl_compo,
+         wls_zpari_mc_compo   TYPE zpari_mc_compo.
+
+  FIELD-SYMBOLS : <wlf_modl_compo> TYPE  zpari_modl_compo,
+                  <wlf_mc_compo>   TYPE zpari_mc_compo.
+
+******--- On s'occupe du mdl ---********
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wis_extract-matnr
+    IMPORTING
+      output = wlv_matnr.
+
+*---On récupére en bdd les infos du modl
+  SELECT SINGLE * FROM zpari_modl INTO wes_zpari_modl
+    WHERE basnr = wiv_basnr
+      AND idplm_modl = wis_extract-idplm_modl
+      AND matnr = wlv_matnr.
+  IF sy-subrc <> 0.
+    SELECT SINGLE * FROM zpari_modl INTO wes_zpari_modl
+      WHERE basnr = wiv_basnr
+        AND idplm_modl = wis_extract-idplm_modl.
+  ENDIF.
+
+  DATA : wlv_grillet TYPE atinn.
+  DATA : wlv_atnam TYPE atnam.
+  wlv_atnam = wis_extract-grillet.
+  SELECT SINGLE atinn FROM cabn INTO wlv_grillet WHERE atnam = wlv_atnam.
+
+*  On check qu'il n'y a pas de changement dans le groupe de marchandise, dans la grille de taille et pays créateur
+  DATA : wlv_return TYPE flag.
+  IF wes_zpari_modl-grillet <> wlv_grillet AND wes_zpari_modl-matnr IS NOT INITIAL.
+    wlv_return = 'X'.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du de la GT'.
+    RETURN.
+  ENDIF.
+  "On autorise le changement de GM pour la saison 0002/2022 sur les reconduits. = >  code A supprimer une fois la saison passée
+  IF  wes_zpari_modl-matkl <> wis_extract-matkl
+     AND  wis_extract-saiso NE '0002' AND wis_extract-saisj NE '2022'
+     AND  wis_extract-saiso NE '0001' AND wis_extract-saisj NE '2023' .
+    wlv_return = 'X'.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du GM'.
+    RETURN.
+  ENDIF.
+*  IF wes_zpari_modl-landc <> wis_extract-landc.
+*    wlv_return = 'X'.
+*    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du PC'.
+*  ENDIF.
+
+
+  wlv_brgew = wes_zpari_modl-brgew.
+  wlv_mdlnr = wes_zpari_modl-mdlnr.
+  wlv_matnr = wes_zpari_modl-matnr.
+  wlv_pc_modl = wes_zpari_modl-landc.
+  wlv_saity = wes_zpari_modl-saity.
+  wlv_mcrec = wes_zpari_modl-mcrec.
+
+*---On déplace toutes les infos du fichier
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modl.
+
+  wes_zpari_mc-zz_tpci = wis_extract-zz_tpci. " ABAP-2447 MSA
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_modl-taimax = wis_extract-taimaxmdl.
+  wes_zpari_modl-taimin = wis_extract-taiminmdl.
+* END INSERT RZE RICEF-100 11/07/2023
+
+  wes_zpari_modl-landc = wlv_pc_modl.
+  wes_zpari_modl-brgew = wlv_brgew.
+  wes_zpari_modl-mdlnr = wlv_mdlnr.
+  wes_zpari_modl-matnr = wlv_matnr.
+  wes_zpari_modl-mcrec = wlv_mcrec.
+
+  wes_zpari_modl-aedat = sy-datum.
+  wes_zpari_modl-aenam = sy-uname.
+
+*  AEDAT
+*AENAM
+
+  wes_zpari_modl-grillet = wlv_grillet.
+
+*---On ajoute aussi des données en dure
+  wes_zpari_modl-meins        = 'ST'.
+
+*---On a quelque subtilitée
+  IF wes_zpari_modl-saity IS INITIAL.
+    wes_zpari_modl-saity = wlv_saity.
+  ENDIF.
+
+*Type d'article
+  IF wes_zpari_modl-mtart IS INITIAL.
+    wes_zpari_modl-mtart = 'ZHAW'.
+  ENDIF.
+**Pays
+  IF wes_zpari_modl-landc IS INITIAL."Si le pays est vide alors FR
+    wes_zpari_modl-landc = 'FR'.
+  ENDIF.
+*Licence
+  IF wis_extract-licence <> 'True' AND wis_extract-licence <> 'true'."Si licence a False pas de coche
+    CLEAR wes_zpari_modl-licence.
+  ELSE."Sinon une coche
+    wes_zpari_modl-licence = 'X'.
+
+    SELECT SINGLE * FROM zartlicence INTO wes_licence WHERE zz_lib = wis_extract-liblicence AND langu = 'F'.
+    IF sy-subrc = 0.
+      IF wes_licence-zactif IS INITIAL.
+        wes_licence-zactif = 'X'.
+      ENDIF.
+    ELSE.
+      SELECT MAX( zz_licence ) FROM zartlicence INTO wes_licence-zz_licence.
+      ADD 1 TO wes_licence-zz_licence.
+      wes_licence-mandt = sy-mandt.
+      wes_licence-zz_lib = wis_extract-liblicence.
+      wes_licence-zactif = 'X'.
+      wes_licence-langu = 'F'.
+      TRANSLATE wes_licence-zz_lib TO UPPER CASE.
+      wev_new_licence = 'X'.
+    ENDIF.
+
+    CONCATENATE '999/999' wis_extract-libcoor INTO wlv_zz_coor SEPARATED BY space.
+
+    SELECT SINGLE * FROM zartcoordonnee INTO @DATA(wls_coord) WHERE zz_lib = @wlv_zz_coor.
+    IF sy-subrc EQ 0.
+      wes_zpari_modl-zz_coor = wls_coord-zz_coor.
+    ENDIF.
+
+    wes_zpari_modl-zz_licence = wes_licence-zz_licence.
+
+  ENDIF.
+
+*---On ajoute des données par MF
+  CALL FUNCTION 'Z_PARI_MATKL_GET_REFART_DATA'
+    EXPORTING
+      wiv_matkl       = wes_zpari_modl-matkl
+    TABLES
+      wct_mc          = wgt2_zpari_mc
+    CHANGING
+      wcs_modl        = wes_zpari_modl
+    EXCEPTIONS
+      inexistant      = 1
+      no_artref_found = 2
+      OTHERS          = 3.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Module "Z_PARI_MATKL_GET_REFART_DATA" en erreur'.
+  ENDIF.
+
+*---On n'oubli pas le mal aimé la table de texte
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_modlt.
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modlt.
+  wes_zpari_modlt-basnr = wes_zpari_modl-basnr.
+  wes_zpari_modlt-mdlnr = wes_zpari_modl-mdlnr.
+  wes_zpari_modlt-spras = 'F'.
+
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wes_zpari_modl-matnr
+    IMPORTING
+      output = wes_zpari_modl-matnr.
+
+******--- On s'occupe du mc ---********
+
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_mc.
+  MOVE-CORRESPONDING wis_extract    TO wes_zpari_mc.
+
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_mc-taimax = wis_extract-taimaxmc.
+  wes_zpari_mc-taimin = wis_extract-taiminmc.
+  wes_zpari_mc-varmin = wis_extract-varminmc.
+  wes_zpari_mc-varmax = wis_extract-varmaxmc.
+* END INSERT RZE RICEF-100 11/07/2023
+
+  IF wis_extract-z_color IS NOT INITIAL." ABO - code couleur
+
+    CLEAR: wlv_codecol, wlv_libcol, wls_paricoldev.
+
+    SPLIT wis_extract-z_color AT '-' INTO wlv_codecol wlv_libcol.
+
+    wes_zpari_mc-z_color = wlv_codecol.
+
+*&- Check si existe sinon on crée
+    SELECT SINGLE * FROM zpari_adm_coldev INTO wls_paricoldev
+      WHERE ekorg = p_ekorg
+      AND color_dev = wlv_codecol.
+    IF sy-subrc NE 0.
+      wls_paricoldev-ekorg      = p_ekorg.
+      wls_paricoldev-color_dev  = wlv_codecol.
+      wls_paricoldev-lib_coldev  = wlv_libcol.
+      wls_paricoldev-spras      = 'FR'.
+      INSERT zpari_adm_coldev FROM wls_paricoldev.
+
+      wls_paricoldev-spras      = 'EN'.
+      INSERT zpari_adm_coldev FROM wls_paricoldev.
+    ENDIF.
+
+  ENDIF.
+
+  wes_zpari_mc-z_perimp = wis_extract-perimpl.
+  wes_zpari_mc-z_regfv = wis_extract-regfdv.
+  wes_zpari_mc-debimp = wis_extract-implant.
+  wes_zpari_mc-finimp = wis_extract-findevie.
+
+  wes_zpari_mc-mdlnr = wes_zpari_modl-mdlnr.
+
+  wes_zpari_mc-erdat = sy-datum.
+  wes_zpari_mc-ernam = sy-uname.
+
+  wes_zpari_mc-zeplm = 'R'.
+  wes_zpari_mc-oksap = 'X'.
+
+  SELECT MAX( color ) FROM zpari_mc INTO wes_zpari_mc-color WHERE mdlnr = wes_zpari_mc-mdlnr.
+  ADD 1 TO wes_zpari_mc-color.
+
+  SELECT SINGLE stpar FROM zplm_trsco_statu INTO wes_zpari_mc-statut WHERE stplm = wis_extract-statut.
+  IF sy-subrc <> 0.
+    CLEAR wes_zpari_mc-statut.
+  ENDIF.
+
+  IF wls_coord-zz_coor IS NOT INITIAL.
+    wes_zpari_mc-zz_coor = wls_coord-zz_coor.
+  ENDIF.
+
+
+*AHO - Alimentation de la table des compositions - 25.10.2024 - Début modification
+
+  REFRESH wlt_zpari_modl_compo.
+  SELECT  * FROM zpari_modl_compo
+  INTO TABLE wlt_zpari_modl_compo
+    WHERE basnr =  wes_zpari_mc-basnr
+    AND mdlnr = wes_zpari_mc-mdlnr.
+
+  IF sy-subrc = 0.
+    LOOP AT wlt_zpari_modl_compo INTO wls_zpari_modl_compo.
+      MOVE-CORRESPONDING wls_zpari_modl_compo  TO  wls_zpari_mc_compo.
+      wls_zpari_mc_compo-color = wes_zpari_mc-color.
+      APPEND wls_zpari_mc_compo TO wet_mc_compo.
+    ENDLOOP.
+
+  ENDIF.
+*AHO - 25.10.2024 - Fin modification
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CR
+*&---------------------------------------------------------------------*
+FORM mm  TABLES wet_modl_compo STRUCTURE    zpari_modl_compo
+               wet_mc_compo   STRUCTURE    zpari_mc_compo
+   CHANGING   wiv_basnr         TYPE zbasnr
+                        wis_extract          TYPE zplm_files_load
+                        wes_zpari_modl    TYPE zpari_modl
+                        wes_zpari_modlt   TYPE zpari_modlt
+                        wev_new_licence   TYPE flag
+                        wes_licence       TYPE zartlicence
+                        wes_zpari_mc      TYPE zpari_mc.
+
+  DATA : wlv_number TYPE int1,
+         wlv_mdlnr  TYPE zmdlnr.
+
+  DATA : wgt2_zpari_mc   TYPE TABLE OF zpari_mc.
+
+  DATA : wls_zpari_modl TYPE zpari_modl,
+         wls_zpari_mc   TYPE zpari_mc.
+
+  DATA: wlv_codecol    TYPE zz_colordev,
+        wlv_libcol     TYPE zz_libcoldev,
+        wls_paricoldev TYPE zpari_adm_coldev.
+
+  FIELD-SYMBOLS : <wlf_modl_compo> TYPE  zpari_modl_compo,
+                  <wlf_mc_compo>   TYPE zpari_mc_compo.
+
+******--- On s'occupe du mdl ---********
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wis_extract-matnr
+    IMPORTING
+      output = wis_extract-matnr.
+
+*---On récupére en bdd les infos du modl
+  SELECT SINGLE * FROM zpari_modl INTO wes_zpari_modl
+    WHERE basnr = wiv_basnr
+      AND idplm_modl = wis_extract-idplm_modl
+      AND matnr = wis_extract-matnr.
+  IF sy-subrc <> 0.
+    SELECT SINGLE * FROM zpari_modl INTO wes_zpari_modl
+      WHERE basnr = wiv_basnr
+        AND idplm_modl = wis_extract-idplm_modl.
+  ENDIF.
+
+  DATA : wlv_grillet TYPE atinn.
+  DATA : wlv_atnam TYPE atnam.
+  wlv_atnam = wis_extract-grillet.
+  SELECT SINGLE atinn FROM cabn INTO wlv_grillet WHERE atnam = wlv_atnam.
+
+
+*  On check qu'il n'y a pas de changement dans le groupe de marchandise, dans la grille de taille et pays créateur
+  DATA : wlv_return TYPE flag.
+  IF wes_zpari_modl-grillet <> wlv_grillet  AND wes_zpari_modl-matnr IS NOT INITIAL.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du de la GT'.
+  ENDIF.
+  IF  wes_zpari_modl-matkl <> wis_extract-matkl
+    AND wis_extract-saiso NE '0002' AND wis_extract-saisj NE '2022'
+    AND wis_extract-saiso NE '0001' AND wis_extract-saisj NE '2023' .
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du GM'.
+  ENDIF.
+*  IF wes_zpari_modl-landc <> wis_extract-landc.
+*    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du PC'.
+*  ENDIF.
+
+  wls_zpari_modl = wes_zpari_modl.
+
+  wlv_mdlnr = wes_zpari_modl-mdlnr.
+
+  wes_zpari_modl-aedat = sy-datum.
+  wes_zpari_modl-aenam = sy-uname.
+
+  wes_zpari_modl-grillet = wlv_grillet.
+
+*---On déplace toutes les infos du fichier
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modl.
+
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_modl-taimax = wis_extract-taimaxmdl.
+  wes_zpari_modl-taimin = wis_extract-taiminmdl.
+* END INSERT RZE RICEF-100 11/07/2023
+
+  wes_zpari_modl-basnr = wiv_basnr.
+  wes_zpari_modl-mdlnr = wlv_mdlnr.
+  wes_zpari_modl-matkl = wls_zpari_modl-matkl.
+  wes_zpari_modl-grillet = wlv_grillet.
+  wes_zpari_modl-landc = wls_zpari_modl-landc.
+  wes_zpari_modl-matnr = wls_zpari_modl-matnr.
+  wes_zpari_modl-mcrec = wls_zpari_modl-mcrec.
+
+*---On ajoute aussi des données en dure
+  wes_zpari_modl-meins        = 'ST'.
+
+  IF wis_extract-brgew IS INITIAL.
+    wes_zpari_modl-brgew = wls_zpari_modl-brgew.
+  ENDIF.
+
+  IF wis_extract-saity IS INITIAL.
+    wes_zpari_modl-saity = wls_zpari_modl-saity.
+  ENDIF.
+
+*---On a quelque subtilitée
+*Type d'article
+  IF wes_zpari_modl-mtart IS INITIAL.
+    wes_zpari_modl-mtart = 'ZHAW'.
+  ENDIF.
+*Licence
+  IF wis_extract-licence <> 'True' AND wis_extract-licence <> 'true'."Si licence a False pas de coche
+    CLEAR wes_zpari_modl-licence.
+  ELSE."Sinon une coche
+    wes_zpari_modl-licence = 'X'.
+
+    SELECT SINGLE * FROM zartlicence INTO wes_licence WHERE zz_lib = wis_extract-liblicence AND langu = 'F'.
+    IF sy-subrc = 0.
+      IF wes_licence-zactif IS INITIAL.
+        wes_licence-zactif = 'X'.
+      ENDIF.
+    ELSE.
+      SELECT MAX( zz_licence ) FROM zartlicence INTO wes_licence-zz_licence.
+      ADD 1 TO wes_licence-zz_licence.
+      wes_licence-mandt = sy-mandt.
+      wes_licence-zz_lib = wis_extract-liblicence.
+      wes_licence-zactif = 'X'.
+      wes_licence-langu = 'F'.
+      TRANSLATE wes_licence-zz_lib TO UPPER CASE.
+      wev_new_licence = 'X'.
+    ENDIF.
+
+    wes_zpari_modl-zz_licence = wes_licence-zz_licence.
+
+  ENDIF.
+
+*---On ajoute des données par MF
+  CALL FUNCTION 'Z_PARI_MATKL_GET_REFART_DATA'
+    EXPORTING
+      wiv_matkl       = wes_zpari_modl-matkl
+    TABLES
+      wct_mc          = wgt2_zpari_mc
+    CHANGING
+      wcs_modl        = wes_zpari_modl
+    EXCEPTIONS
+      inexistant      = 1
+      no_artref_found = 2
+      OTHERS          = 3.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Module "Z_PARI_MATKL_GET_REFART_DATA" en erreur'.
+  ENDIF.
+
+*---On n'oubli pas le mal aimé la table de texte
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_modlt.
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modlt.
+  wes_zpari_modlt-basnr = wes_zpari_modl-basnr.
+  wes_zpari_modlt-mdlnr = wes_zpari_modl-mdlnr.
+  wes_zpari_modlt-spras = 'F'.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wes_zpari_modl-matnr
+    IMPORTING
+      output = wes_zpari_modl-matnr.
+
+
+
+******--- On s'occupe du mc ---********
+
+  SELECT SINGLE * FROM zpari_mc INTO wes_zpari_mc
+           WHERE basnr = wiv_basnr
+             AND idplm_mc = wis_extract-idplm_mc.
+
+**DEB INS ABAP-2322 MSA
+*  DATA : wlv_zz_coor TYPE zz_lib,
+*        wls_zartcoordonnee  TYPE zartcoordonnee.
+*
+*  CONCATENATE '999/999' wis_extract-libcoor INTO wlv_zz_coor SEPARATED BY space.
+*
+*  SELECT SINGLE * FROM zartcoordonnee INTO wls_zartcoordonnee
+*                  WHERE zz_lib = wlv_zz_coor.
+*  IF sy-subrc = 0.
+*    wes_zpari_modl-zz_coor = wls_zartcoordonnee-zz_coor.
+*    wes_zpari_mc-zz_coor   = wls_zartcoordonnee-zz_coor.
+*
+*
+*  ENDIF.
+**END INS ABAP-2322 MSA
+
+  wes_zpari_modl-aedat = sy-datum.
+  wes_zpari_modl-aenam = sy-uname.
+
+*  On check qu'il n'y a pas de changement dans le groupe de marchandise, dans la grille de taille et pays créateur
+  IF wes_zpari_mc-color_sap <> wis_extract-color_sap.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du colori SAP'.
+  ENDIF.
+  IF wes_zpari_mc-landc <> wis_extract-landc.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du PC'.
+  ENDIF.
+
+  wls_zpari_mc = wes_zpari_mc.
+
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_mc.
+  wes_zpari_mc-zz_tpci = wis_extract-zz_tpci. " ABAP-2447 MSA
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_mc-taimax = wis_extract-taimaxmc.
+  wes_zpari_mc-taimin = wis_extract-taiminmc.
+  wes_zpari_mc-varmin = wis_extract-varminmc.
+  wes_zpari_mc-varmax = wis_extract-varmaxmc.
+* END INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_mc-basnr = wiv_basnr.
+  wes_zpari_mc-mdlnr = wlv_mdlnr.
+  wes_zpari_mc-color = wls_zpari_mc-color.
+  wes_zpari_mc-color_sap = wls_zpari_mc-color_sap.
+  wes_zpari_mc-matnr = wls_zpari_mc-matnr.
+  wes_zpari_mc-landc = wls_zpari_mc-landc.
+  wes_zpari_mc-mcrec = wls_zpari_mc-mcrec.
+
+  IF wis_extract-saity IS INITIAL.
+    wes_zpari_mc-saity = wls_zpari_mc-saity.
+  ENDIF.
+
+  SELECT SINGLE stpar FROM zplm_trsco_statu INTO wes_zpari_mc-statut WHERE stplm = wis_extract-statut.
+  IF sy-subrc <> 0.
+    CLEAR wes_zpari_mc-statut.
+  ENDIF.
+
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wes_zpari_mc-matnr
+    IMPORTING
+      output = wes_zpari_mc-matnr.
+
+  wes_zpari_mc-z_perimp = wis_extract-perimpl.
+  wes_zpari_mc-z_regfv = wis_extract-regfdv.
+  wes_zpari_mc-debimp = wis_extract-implant.
+  wes_zpari_mc-finimp = wis_extract-findevie.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CR
+*&---------------------------------------------------------------------*
+FORM mr  TABLES wet_modl_compo STRUCTURE    zpari_modl_compo
+               wet_mc_compo   STRUCTURE    zpari_mc_compo
+  CHANGING   wiv_basnr         TYPE zbasnr
+                        wis_extract         TYPE zplm_files_load
+                        wes_zpari_modl  TYPE zpari_modl
+                        wes_zpari_modlt TYPE zpari_modlt
+                        wev_new_licence TYPE flag
+                        wes_licence     TYPE zartlicence
+                        wes_zpari_mc    TYPE zpari_mc.
+
+  DATA : wlv_number TYPE int1,
+         wlv_mdlnr  TYPE zmdlnr.
+
+  DATA : wls_zartlicence TYPE zartlicence,
+         wgt2_zpari_mc   TYPE TABLE OF zpari_mc.
+
+  DATA : wls_zpari_modl TYPE zpari_modl,
+         wls_zpari_mc   TYPE zpari_mc.
+
+
+  DATA : wlt_mc TYPE TABLE OF zpari_mc,
+         wls_mc LIKE LINE OF wlt_mc.
+
+  DATA: wlv_codecol    TYPE zz_colordev,
+        wlv_libcol     TYPE zz_libcoldev,
+        wls_paricoldev TYPE zpari_adm_coldev.
+
+  FIELD-SYMBOLS : <wlf_modl_compo> TYPE  zpari_modl_compo,
+                  <wlf_mc_compo>   TYPE zpari_mc_compo.
+
+******--- On s'occupe du mdl ---********
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wis_extract-matnr
+    IMPORTING
+      output = wis_extract-matnr.
+
+*---On récupére en bdd les infos du modl
+  SELECT SINGLE * FROM zpari_modl INTO wes_zpari_modl
+    WHERE basnr = wiv_basnr
+      AND idplm_modl = wis_extract-idplm_modl
+      AND matnr = wis_extract-matnr.
+  IF sy-subrc <> 0.
+    SELECT SINGLE * FROM zpari_modl INTO wes_zpari_modl
+      WHERE basnr = wiv_basnr
+        AND idplm_modl = wis_extract-idplm_modl.
+  ENDIF.
+
+  DATA : wlv_grillet TYPE atinn.
+  DATA : wlv_atnam TYPE atnam.
+  wlv_atnam = wis_extract-grillet.
+  SELECT SINGLE atinn FROM cabn INTO wlv_grillet WHERE atnam = wlv_atnam.
+
+*  On check qu'il n'y a pas de changement dans le groupe de marchandise, dans la grille de taille et pays créateur
+  DATA : wlv_return TYPE flag.
+  IF wes_zpari_modl-grillet <> wlv_grillet  AND wes_zpari_modl-matnr IS NOT INITIAL.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du de la GT'.
+    RETURN.
+  ENDIF.
+  IF  wes_zpari_modl-matkl <> wis_extract-matkl
+    AND wis_extract-saiso NE '0002' AND wis_extract-saisj NE '2022'
+    AND wis_extract-saiso NE '0001' AND wis_extract-saisj NE '2023' .
+
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du GM'.
+    RETURN.
+  ENDIF.
+
+  wls_zpari_modl = wes_zpari_modl.
+
+  wlv_mdlnr = wes_zpari_modl-mdlnr.
+
+
+  wes_zpari_modl-aedat = sy-datum.
+  wes_zpari_modl-aenam = sy-uname.
+
+*---On déplace toutes les infos du fichier
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modl.
+
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_modl-taimax = wis_extract-taimaxmdl.
+  wes_zpari_modl-taimin = wis_extract-taiminmdl.
+* END INSERT RZE RICEF-100 11/07/2023
+
+  wes_zpari_modl-mdlnr = wlv_mdlnr.
+  wes_zpari_modl-matkl = wls_zpari_modl-matkl.
+  wes_zpari_modl-grillet = wlv_grillet.
+  wes_zpari_modl-landc = wls_zpari_modl-landc.
+  wes_zpari_modl-basnr = wiv_basnr.
+  wes_zpari_modl-matnr = wls_zpari_modl-matnr.
+  wes_zpari_modl-mcrec = wls_zpari_modl-mcrec.
+
+  IF wis_extract-brgew IS INITIAL.
+    wes_zpari_modl-brgew = wls_zpari_modl-brgew.
+  ENDIF.
+
+
+  IF wis_extract-saity IS INITIAL.
+    wes_zpari_modl-saity = wls_zpari_modl-saity.
+  ENDIF.
+
+  "On autorise le changement de GM pour la saison 0002/2022 sur les reconduits. = >  code A supprimer une fois la saison passée
+  IF  wes_zpari_modl-matkl <> wis_extract-matkl
+    AND wis_extract-saiso NE '0002' AND wis_extract-saisj NE '2022'
+    AND wis_extract-saiso NE '0001' AND wis_extract-saisj NE '2023'.
+    wlv_return = 'X'.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du GM'.
+    RETURN.
+  ENDIF.
+
+*---On ajoute aussi des données en dure
+  wes_zpari_modl-meins        = 'ST'.
+
+*---On a quelque subtilitée
+*Type d'article
+  IF wes_zpari_modl-mtart IS INITIAL.
+    wes_zpari_modl-mtart = 'ZHAW'.
+  ENDIF.
+*Licence
+  IF wis_extract-licence <> 'True' AND wis_extract-licence <> 'true'."Si licence a False pas de coche
+    CLEAR wes_zpari_modl-licence.
+  ELSE."Sinon une coche
+    wes_zpari_modl-licence = 'X'.
+
+    SELECT SINGLE * FROM zartlicence INTO wes_licence WHERE zz_lib = wis_extract-liblicence AND langu = 'F'.
+    IF sy-subrc = 0.
+      IF wes_licence-zactif IS INITIAL.
+        wes_licence-zactif = 'X'.
+      ENDIF.
+    ELSE.
+      SELECT MAX( zz_licence ) FROM zartlicence INTO wes_licence-zz_licence.
+      ADD 1 TO wes_licence-zz_licence.
+      wes_licence-mandt = sy-mandt.
+      wes_licence-zz_lib = wis_extract-liblicence.
+      wes_licence-zactif = 'X'.
+      wes_licence-langu = 'F'.
+      TRANSLATE wes_licence-zz_lib TO UPPER CASE.
+      wev_new_licence = 'X'.
+    ENDIF.
+
+    wes_zpari_modl-zz_licence = wes_licence-zz_licence.
+
+  ENDIF.
+
+**DEB INS ABAP-2322 MSA
+*  DATA : wlv_zz_coor TYPE zz_lib,
+*        wls_zartcoordonnee  TYPE zartcoordonnee.
+*
+*  CONCATENATE '999/999' wis_extract-libcoor INTO wlv_zz_coor SEPARATED BY space.
+*
+*  SELECT SINGLE * FROM zartcoordonnee INTO wls_zartcoordonnee
+*                  WHERE zz_lib = wlv_zz_coor.
+*  IF sy-subrc = 0.
+*    wes_zpari_modl-zz_coor = wls_zartcoordonnee-zz_coor.
+**    wes_zpari_mc-zz_coor   = wls_zartcoordonnee-zz_coor.
+*
+*
+*  ENDIF.
+**END INS ABAP-2322 MSA
+
+*---On ajoute des données par MF
+  CALL FUNCTION 'Z_PARI_MATKL_GET_REFART_DATA'
+    EXPORTING
+      wiv_matkl       = wes_zpari_modl-matkl
+    TABLES
+      wct_mc          = wgt2_zpari_mc
+    CHANGING
+      wcs_modl        = wes_zpari_modl
+    EXCEPTIONS
+      inexistant      = 1
+      no_artref_found = 2
+      OTHERS          = 3.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Module "Z_PARI_MATKL_GET_REFART_DATA" en erreur'.
+  ENDIF.
+
+*---On n'oubli pas le mal aimé la table de texte
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_modlt.
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modlt.
+  wes_zpari_modlt-basnr = wes_zpari_modl-basnr.
+  wes_zpari_modlt-mdlnr = wes_zpari_modl-mdlnr.
+  wes_zpari_modlt-spras = 'F'.
+
+  DATA : wlv_color_sap TYPE zpari_mc-color_sap.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_OUTPUT'
+    EXPORTING
+      input  = wis_extract-color_sap
+    IMPORTING
+      output = wlv_color_sap.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wlv_color_sap
+    IMPORTING
+      output = wlv_color_sap.
+
+  DATA : wlv_matnr TYPE matnr.
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wis_extract-matnr
+    IMPORTING
+      output = wlv_matnr.
+
+******--- On s'occupe du mc ---********
+
+  SELECT * FROM zpari_mc INTO TABLE wlt_mc WHERE matnr = wlv_matnr AND color_sap = wlv_color_sap AND basnr <> wiv_basnr ORDER BY basnr DESCENDING.
+  READ TABLE wlt_mc INTO wls_mc INDEX 1.
+
+*  On check qu'il n'y a pas de changement dans le groupe de marchandise, dans la grille de taille et pays créateur
+  IF wls_mc-color_sap <> wlv_color_sap.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du colori SAP'.
+  ENDIF.
+  IF wls_mc-landc <> wis_extract-landc.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du PC'.
+  ENDIF.
+
+  MOVE-CORRESPONDING wls_mc TO wes_zpari_mc.
+  MOVE-CORRESPONDING wis_extract    TO wes_zpari_mc.
+
+  wes_zpari_mc-zz_tpci = wis_extract-zz_tpci. " ABAP-2447 MSA
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_mc-taimax = wis_extract-taimaxmc.
+  wes_zpari_mc-taimin = wis_extract-taiminmc.
+  wes_zpari_mc-varmin = wis_extract-varminmc.
+  wes_zpari_mc-varmax = wis_extract-varmaxmc.
+* END INSERT RZE RICEF-100 11/07/2023
+
+  wes_zpari_mc-z_perimp = wis_extract-perimpl.
+  wes_zpari_mc-z_regfv = wis_extract-regfdv.
+  wes_zpari_mc-debimp = wis_extract-implant.
+  wes_zpari_mc-finimp = wis_extract-findevie.
+
+  IF wis_extract-z_color IS NOT INITIAL." ABO - code couleur
+
+    CLEAR: wlv_codecol, wlv_libcol, wls_paricoldev.
+
+    SPLIT wis_extract-z_color AT '-' INTO wlv_codecol wlv_libcol.
+
+    wes_zpari_mc-z_color = wlv_codecol.
+
+*&- Check si existe sinon on crée
+    SELECT SINGLE * FROM zpari_adm_coldev INTO wls_paricoldev
+      WHERE ekorg = p_ekorg
+      AND color_dev = wlv_codecol.
+    IF sy-subrc NE 0.
+      wls_paricoldev-ekorg      = p_ekorg.
+      wls_paricoldev-color_dev  = wlv_codecol.
+      wls_paricoldev-lib_coldev  = wlv_libcol.
+      wls_paricoldev-spras      = 'FR'.
+      INSERT zpari_adm_coldev FROM wls_paricoldev.
+
+      wls_paricoldev-spras      = 'EN'.
+      INSERT zpari_adm_coldev FROM wls_paricoldev.
+    ENDIF.
+
+  ENDIF.
+
+
+  wes_zpari_mc-aedat = sy-datum.
+  wes_zpari_mc-aenam = sy-uname.
+
+
+  wes_zpari_mc-basnr = wiv_basnr.
+  wes_zpari_mc-mdlnr = wls_mc-mdlnr.
+
+  wes_zpari_mc-mcrec = 'X'.
+  wes_zpari_mc-oksap = 'X'.
+
+  IF wis_extract-brgew IS INITIAL.
+    wes_zpari_mc-brgew = wls_mc-brgew.
+  ENDIF.
+
+  wes_zpari_mc-landc = wls_mc-landc.
+
+  IF wis_extract-saity IS INITIAL.
+    wes_zpari_mc-saity = wls_zpari_mc-saity.
+  ENDIF.
+
+  SELECT SINGLE stpar FROM zplm_trsco_statu INTO wes_zpari_mc-statut WHERE stplm = wis_extract-statut.
+  IF sy-subrc <> 0.
+    CLEAR wes_zpari_mc-statut.
+  ENDIF.
+
+
+  SELECT * FROM zpari_mc_compo INTO TABLE wet_mc_compo WHERE basnr = wls_mc-basnr AND mdlnr = wls_mc-mdlnr AND color = wls_mc-color.
+  LOOP AT wet_mc_compo ASSIGNING <wlf_mc_compo>.
+    <wlf_mc_compo>-basnr = wes_zpari_mc-basnr.
+    <wlf_mc_compo>-mdlnr = wes_zpari_mc-mdlnr.
+    <wlf_mc_compo>-color = wes_zpari_mc-color.
+  ENDLOOP.
+
+
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CR
+*&---------------------------------------------------------------------*
+FORM rc  TABLES wet_modl_compo STRUCTURE    zpari_modl_compo
+               wet_mc_compo   STRUCTURE    zpari_mc_compo
+   CHANGING      wiv_basnr         TYPE zbasnr
+                        wis_extract          TYPE zplm_files_load
+                        wes_zpari_modl    TYPE zpari_modl
+                        wes_zpari_modlt   TYPE zpari_modlt
+                        wev_new_licence   TYPE flag
+                        wes_licence       TYPE zartlicence
+                        wes_zpari_mc      TYPE zpari_mc.
+
+  DATA : wlv_number      TYPE int1,
+         wls_zartlicence TYPE zartlicence,
+         wgt2_zpari_mc   TYPE TABLE OF zpari_mc.
+
+  DATA : wlt_modl TYPE TABLE OF zpari_modl,
+         wls_modl LIKE LINE OF wlt_modl.
+
+  DATA : wlt_mc TYPE TABLE OF zpari_mc,
+         wls_mc LIKE LINE OF wlt_mc.
+
+  DATA : wlv_matnr TYPE matnr.
+
+  DATA : wlv_pc_modl TYPE land1.
+
+  DATA: wlv_codecol    TYPE zz_colordev,
+        wlv_libcol     TYPE zz_libcoldev,
+        wls_paricoldev TYPE zpari_adm_coldev,
+        wlv_zz_coor    TYPE zz_lib..
+
+  FIELD-SYMBOLS : <wlf_modl_compo> TYPE  zpari_modl_compo,
+                  <wlf_mc_compo>   TYPE zpari_mc_compo.
+
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wis_extract-matnr
+    IMPORTING
+      output = wlv_matnr.
+
+  SELECT * FROM zpari_modl INTO TABLE wlt_modl WHERE matnr = wlv_matnr ORDER BY basnr DESCENDING.
+  READ TABLE wlt_modl INTO wls_modl INDEX 1.
+  MOVE-CORRESPONDING wls_modl TO wes_zpari_modl.
+
+  DATA : wlv_grillet TYPE atinn.
+  DATA : wlv_atnam TYPE atnam.
+  wlv_atnam = wis_extract-grillet.
+  SELECT SINGLE atinn FROM cabn INTO wlv_grillet WHERE atnam = wlv_atnam.
+
+
+*  On check qu'il n'y a pas de changement dans le groupe de marchandise, dans la grille de taille et pays créateur
+  IF wes_zpari_modl-grillet <> wlv_grillet.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du de la GT'.
+  ENDIF.
+  IF  wes_zpari_modl-matkl <> wis_extract-matkl
+    AND wis_extract-saiso NE '0002' AND wis_extract-saisj NE '2022'
+    AND wis_extract-saiso NE '0001' AND wis_extract-saisj NE '2023'.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du GM'.
+  ENDIF.
+
+  wlv_pc_modl = wes_zpari_modl-landc.
+
+******--- On s'occupe du mdl ---********
+*---On déplace toutes les infos du fichier
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modl.
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_modl-taimax = wis_extract-taimaxmdl.
+  wes_zpari_modl-taimin = wis_extract-taiminmdl.
+* END INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_modl-basnr    = wiv_basnr.
+  wes_zpari_modl-mdlnr    = wls_modl-mdlnr.
+  wes_zpari_modl-grillet  = wlv_grillet.
+  wes_zpari_modl-aedat    = sy-datum.
+  wes_zpari_modl-aenam    = sy-uname.
+  wes_zpari_modl-matnr    = wlv_matnr.
+  wes_zpari_modl-landc    = wls_modl-landc.
+
+*---On ajoute aussi des données en dure
+  wes_zpari_modl-mtart        = 'ZHAW'.
+  wes_zpari_modl-meins        = 'ST'.
+  wes_zpari_modl-zz_ucomp1    = 'EXTERIEUR'.
+  wes_zpari_modl-zz_ecomp1    = '00006'.
+  wes_zpari_modl-zz_epou1     = '100'.
+  wes_zpari_modl-mcrec        = 'X'.
+  wes_zpari_modl-oksap        = 'X'.
+
+  IF wis_extract-saity IS INITIAL.
+    wes_zpari_modl-saity = wls_modl-saity.
+  ENDIF.
+*---On a quelque subtilitée
+*Licence
+  IF wis_extract-licence <> 'True' AND wis_extract-licence <> 'true'."Si licence a False pas de coche
+    CLEAR wes_zpari_modl-licence.
+  ELSE."Sinon une coche
+    wes_zpari_modl-licence = 'X'.
+
+    SELECT SINGLE * FROM zartlicence INTO wes_licence WHERE zz_lib = wis_extract-liblicence AND langu = 'F'.
+    IF sy-subrc = 0.
+      IF wes_licence-zactif IS INITIAL.
+        wes_licence-zactif = 'X'.
+      ENDIF.
+    ELSE.
+      SELECT MAX( zz_licence ) FROM zartlicence INTO wes_licence-zz_licence.
+      ADD 1 TO wes_licence-zz_licence.
+      wes_licence-mandt = sy-mandt.
+      wes_licence-zz_lib = wis_extract-liblicence.
+      wes_licence-zactif = 'X'.
+      wes_licence-langu = 'F'.
+      TRANSLATE wes_licence-zz_lib TO UPPER CASE.
+      wev_new_licence = 'X'.
+    ENDIF.
+
+    wes_zpari_modl-zz_licence = wes_licence-zz_licence.
+
+  ENDIF.
+
+  IF wis_extract-brgew IS INITIAL.
+    wes_zpari_modl-brgew = wls_modl-brgew.
+  ENDIF.
+
+
+*---On ajoute des données par MF
+  CALL FUNCTION 'Z_PARI_MATKL_GET_REFART_DATA'
+    EXPORTING
+      wiv_matkl       = wes_zpari_modl-matkl
+    TABLES
+      wct_mc          = wgt2_zpari_mc
+    CHANGING
+      wcs_modl        = wes_zpari_modl
+    EXCEPTIONS
+      inexistant      = 1
+      no_artref_found = 2
+      OTHERS          = 3.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Module "Z_PARI_MATKL_GET_REFART_DATA" en erreur'.
+  ENDIF.
+
+  CONCATENATE '999/999' wis_extract-libcoor INTO wlv_zz_coor SEPARATED BY space.
+
+  SELECT SINGLE * FROM zartcoordonnee INTO @DATA(wls_coord) WHERE zz_lib = @wlv_zz_coor.
+  IF sy-subrc EQ 0.
+    wes_zpari_modl-zz_coor = wls_coord-zz_coor.
+  ENDIF.
+
+
+*---On n'oubli pas le mal aimé la table de texte
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_modlt.
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modlt.
+  wes_zpari_modlt-basnr = wes_zpari_modl-basnr.
+  wes_zpari_modlt-mdlnr = wes_zpari_modl-mdlnr.
+  wes_zpari_modlt-spras = 'F'.
+
+
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wes_zpari_modl-matnr
+    IMPORTING
+      output = wes_zpari_modl-matnr.
+
+
+  "On autorise le changement de GM pour la saison 0002/2022 sur les reconduits. = >  code A supprimer une fois la saison passée
+  ">>>>> MAL 24062022
+  " + prise en compte de 0001 et 2022 en 2023 pour la suite du projet socle
+  IF  wes_zpari_modl-matkl <> wis_extract-matkl
+    AND wis_extract-saiso NE '0002' AND wis_extract-saisj NE '2022'
+   AND wis_extract-saiso NE '0001' AND wis_extract-saisj NE '2023'.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du GM'.
+    RETURN.
+  ENDIF.
+
+******--- On s'occupe du mc ---********
+
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_mc.
+  MOVE-CORRESPONDING wis_extract    TO wes_zpari_mc.
+
+  wes_zpari_mc-zz_tpci = wis_extract-zz_tpci. " ABAP-2447 MSA
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_mc-taimax = wis_extract-taimaxmc.
+  wes_zpari_mc-taimin = wis_extract-taiminmc.
+  wes_zpari_mc-varmin = wis_extract-varminmc.
+  wes_zpari_mc-varmax = wis_extract-varmaxmc.
+* END INSERT RZE RICEF-100 11/07/2023
+
+  IF wis_extract-z_color IS NOT INITIAL." ABO - code couleur
+
+    CLEAR: wlv_codecol, wlv_libcol, wls_paricoldev.
+
+    SPLIT wis_extract-z_color AT '-' INTO wlv_codecol wlv_libcol.
+
+    wes_zpari_mc-z_color = wlv_codecol.
+
+*&- Check si existe sinon on crée
+    SELECT SINGLE * FROM zpari_adm_coldev INTO wls_paricoldev
+      WHERE ekorg = p_ekorg
+      AND color_dev = wlv_codecol.
+    IF sy-subrc NE 0.
+      wls_paricoldev-ekorg      = p_ekorg.
+      wls_paricoldev-color_dev  = wlv_codecol.
+      wls_paricoldev-lib_coldev  = wlv_libcol.
+      wls_paricoldev-spras      = 'FR'.
+      INSERT zpari_adm_coldev FROM wls_paricoldev.
+
+      wls_paricoldev-spras      = 'EN'.
+      INSERT zpari_adm_coldev FROM wls_paricoldev.
+    ENDIF.
+
+  ENDIF.
+
+
+  wes_zpari_mc-mdlnr = wes_zpari_modl-mdlnr.
+
+  wes_zpari_mc-erdat = sy-datum.
+  wes_zpari_mc-ernam = sy-uname.
+
+  wes_zpari_mc-zeplm = 'R'.
+  wes_zpari_mc-oksap = 'X'.
+*  CLEAR wes_zpari_mc-matnr.             "RZE 31/05/2023 - Récupérer l'article ABAP-388 pour MC
+  CLEAR wes_zpari_mc-mcrec.
+
+  IF wls_coord-zz_coor IS NOT INITIAL.
+    wes_zpari_mc-zz_coor = wls_coord-zz_coor.
+  ENDIF.
+
+  SELECT MAX( color ) FROM zpari_mc INTO wes_zpari_mc-color WHERE mdlnr = wes_zpari_mc-mdlnr.
+  ADD 1 TO wes_zpari_mc-color.
+
+
+  SELECT SINGLE stpar FROM zplm_trsco_statu INTO wes_zpari_mc-statut WHERE stplm = wis_extract-statut.
+  IF sy-subrc <> 0.
+    CLEAR wes_zpari_mc-statut.
+  ENDIF.
+
+  wes_zpari_mc-z_perimp = wis_extract-perimpl.
+  wes_zpari_mc-z_regfv = wis_extract-regfdv.
+  wes_zpari_mc-debimp = wis_extract-implant.
+  wes_zpari_mc-finimp = wis_extract-findevie.
+
+  SELECT * FROM zpari_modl_compo INTO TABLE wet_modl_compo WHERE basnr = wls_modl-basnr AND mdlnr = wls_modl-mdlnr.
+  LOOP AT wet_modl_compo ASSIGNING <wlf_modl_compo>.
+    <wlf_modl_compo>-basnr = wes_zpari_mc-basnr.
+    <wlf_modl_compo>-mdlnr = wes_zpari_mc-mdlnr.
+  ENDLOOP.
+
+*AHO - Réinitialisation du classement douanier en cas de reconduction du modèle -  28/08/2024 - Début modification
+  CLEAR : wes_zpari_modl-class_douane,
+          wes_zpari_modl-dt_cl_douane.
+*AHO - 28/08/2024 - Fin modification
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  RR
+*&---------------------------------------------------------------------*
+FORM rr TABLES wet_modl_compo STRUCTURE    zpari_modl_compo
+               wet_mc_compo   STRUCTURE    zpari_mc_compo
+  CHANGING   wiv_basnr         TYPE zbasnr
+                        wis_extract          TYPE zplm_files_load
+                        wes_zpari_modl    TYPE zpari_modl
+                        wes_zpari_modlt   TYPE zpari_modlt
+                        wev_new_licence   TYPE flag
+                        wes_licence       TYPE zartlicence
+                        wes_zpari_mc      TYPE zpari_mc.
+
+  DATA : wlv_number      TYPE int1,
+         wls_zartlicence TYPE zartlicence,
+         wgt2_zpari_mc   TYPE TABLE OF zpari_mc.
+
+  DATA : wlt_modl TYPE TABLE OF zpari_modl,
+         wls_modl LIKE LINE OF wlt_modl.
+
+  DATA : wlt_mc TYPE TABLE OF zpari_mc,
+         wls_mc LIKE LINE OF wlt_mc.
+
+  DATA : wlv_matnr TYPE matnr.
+
+  FIELD-SYMBOLS : <wlf_modl_compo> TYPE  zpari_modl_compo,
+                  <wlf_mc_compo>   TYPE zpari_mc_compo.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wis_extract-matnr
+    IMPORTING
+      output = wlv_matnr.
+
+  SELECT * FROM zpari_modl INTO TABLE wlt_modl WHERE matnr = wlv_matnr ORDER BY basnr DESCENDING.
+  READ TABLE wlt_modl INTO wls_modl INDEX 1.
+  MOVE-CORRESPONDING wls_modl TO wes_zpari_modl.
+
+  DATA : wlv_grillet TYPE atinn.
+  DATA : wlv_atnam TYPE atnam.
+  wlv_atnam = wis_extract-grillet.
+  SELECT SINGLE atinn FROM cabn INTO wlv_grillet WHERE atnam = wlv_atnam.
+
+*  On check qu'il n'y a pas de changement dans le groupe de marchandise, dans la grille de taille et pays créateur
+  IF wes_zpari_modl-grillet <> wlv_grillet.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du de la GT'.
+  ENDIF.
+  IF  wes_zpari_modl-matkl <> wis_extract-matkl
+    AND wis_extract-saiso NE '0002' AND wis_extract-saisj NE '2022'
+   AND wis_extract-saiso NE '0001' AND wis_extract-saisj NE '2023'.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du GM'.
+  ENDIF.
+
+
+******--- On s'occupe du mdl ---********
+*---On déplace toutes les infos du fichier
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modl.
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_modl-taimax = wis_extract-taimaxmdl.
+  wes_zpari_modl-taimin = wis_extract-taiminmdl.
+* END INSERT RZE RICEF-100 11/07/2023
+
+* On ne modifie pas les valeurs suivantes
+
+  wes_zpari_modl-basnr    = wiv_basnr.
+  wes_zpari_modl-mdlnr    = wls_modl-mdlnr.
+  wes_zpari_modl-grillet  = wlv_grillet.
+  wes_zpari_modl-aedat    = sy-datum.
+  wes_zpari_modl-aenam    = sy-uname.
+  wes_zpari_modl-matnr    = wlv_matnr.
+  wes_zpari_modl-landc    = wls_modl-landc.
+
+
+*---On ajoute aussi des données en dure
+  wes_zpari_modl-mtart        = 'ZHAW'.
+  wes_zpari_modl-meins        = 'ST'.
+  wes_zpari_modl-zz_ucomp1    = 'EXTERIEUR'.
+  wes_zpari_modl-zz_ecomp1    = '00006'.
+  wes_zpari_modl-zz_epou1     = '100'.
+  wes_zpari_modl-mcrec        = 'X'.
+  wes_zpari_modl-oksap        = 'X'.
+
+  IF wis_extract-saity IS INITIAL.
+    wes_zpari_modl-saity = wls_modl-saity.
+  ENDIF.
+
+*---On a quelque subtilitée
+*Licence
+  IF wis_extract-licence <> 'True' AND wis_extract-licence <> 'true'."Si licence a False pas de coche
+    CLEAR wes_zpari_modl-licence.
+  ELSE."Sinon une coche
+    wes_zpari_modl-licence = 'X'.
+
+    SELECT SINGLE * FROM zartlicence INTO wes_licence WHERE zz_lib = wis_extract-liblicence AND langu = 'F'.
+    IF sy-subrc = 0.
+      IF wes_licence-zactif IS INITIAL.
+        wes_licence-zactif = 'X'.
+      ENDIF.
+    ELSE.
+      SELECT MAX( zz_licence ) FROM zartlicence INTO wes_licence-zz_licence.
+      ADD 1 TO wes_licence-zz_licence.
+      wes_licence-mandt = sy-mandt.
+      wes_licence-zz_lib = wis_extract-liblicence.
+      wes_licence-zactif = 'X'.
+      wes_licence-langu = 'F'.
+      TRANSLATE wes_licence-zz_lib TO UPPER CASE.
+      wev_new_licence = 'X'.
+    ENDIF.
+
+    wes_zpari_modl-zz_licence = wes_licence-zz_licence.
+
+  ENDIF.
+
+  IF wis_extract-brgew IS INITIAL.
+    wes_zpari_modl-brgew = wls_modl-brgew.
+  ENDIF.
+
+  "On autorise le changement de GM pour la saison 0002/2022 sur les reconduits. = >  code A supprimer une fois la saison passée
+  IF  wes_zpari_modl-matkl <> wis_extract-matkl
+    AND wis_extract-saiso NE '0002' AND wis_extract-saisj NE '2022'
+    AND wis_extract-saiso NE '0001' AND wis_extract-saisj NE '2023' .
+
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du GM'.
+  ENDIF.
+
+*---On ajoute des données par MF
+  CALL FUNCTION 'Z_PARI_MATKL_GET_REFART_DATA'
+    EXPORTING
+      wiv_matkl       = wes_zpari_modl-matkl
+    TABLES
+      wct_mc          = wgt2_zpari_mc
+    CHANGING
+      wcs_modl        = wes_zpari_modl
+    EXCEPTIONS
+      inexistant      = 1
+      no_artref_found = 2
+      OTHERS          = 3.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Module "Z_PARI_MATKL_GET_REFART_DATA" en erreur'.
+  ENDIF.
+
+*---On n'oubli pas le mal aimé la table de texte
+  MOVE-CORRESPONDING wes_zpari_modl TO wes_zpari_modlt.
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_modlt.
+  wes_zpari_modlt-basnr = wes_zpari_modl-basnr.
+  wes_zpari_modlt-mdlnr = wes_zpari_modl-mdlnr.
+  wes_zpari_modlt-spras = 'F'.
+
+  DATA : wlv_color_sap TYPE zpari_mc-color_sap.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_OUTPUT'
+    EXPORTING
+      input  = wis_extract-color_sap
+    IMPORTING
+      output = wlv_color_sap.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wlv_color_sap
+    IMPORTING
+      output = wlv_color_sap.
+
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wes_zpari_modl-matnr
+    IMPORTING
+      output = wes_zpari_modl-matnr.
+
+
+
+  SELECT * FROM zpari_mc INTO TABLE wlt_mc WHERE matnr = wlv_matnr AND color_sap = wlv_color_sap AND basnr <> wiv_basnr ORDER BY basnr DESCENDING.
+  READ TABLE wlt_mc INTO wls_mc INDEX 1.
+
+*  On check qu'il n'y a pas de changement dans le groupe de marchandise, dans la grille de taille et pays créateur
+  IF wls_mc-color_sap <> wlv_color_sap.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du colori SAP'.
+  ENDIF.
+  IF wls_mc-landc <> wis_extract-landc.
+    wis_extract-statut_tech = '4'. " pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog USING wis_extract-idplm_mc wlv_number '4' 'Changement du PC'.
+  ENDIF.
+
+  MOVE-CORRESPONDING wls_mc TO wes_zpari_mc.
+  MOVE-CORRESPONDING wis_extract    TO wes_zpari_mc.
+
+  wes_zpari_mc-zz_tpci = wis_extract-zz_tpci. " ABAP-2447 MSA
+* BEGIN INSERT RZE RICEF-100 11/07/2023
+  wes_zpari_mc-taimax = wis_extract-taimaxmc.
+  wes_zpari_mc-taimin = wis_extract-taiminmc.
+  wes_zpari_mc-varmin = wis_extract-varminmc.
+  wes_zpari_mc-varmax = wis_extract-varmaxmc.
+* END INSERT RZE RICEF-100 11/07/2023
+
+  wes_zpari_mc-mdlnr = wls_mc-mdlnr.
+  wes_zpari_mc-basnr = wiv_basnr.
+
+  wes_zpari_mc-matnr = wlv_matnr.
+  wes_zpari_mc-landc = wls_mc-landc.
+
+  wes_zpari_mc-aedat = sy-datum.
+  wes_zpari_mc-aenam = sy-uname.
+
+  wes_zpari_mc-mcrec = 'X'.
+  wes_zpari_mc-oksap = 'X'.
+
+  IF wis_extract-brgew IS INITIAL.
+    wes_zpari_mc-brgew = wls_mc-brgew.
+  ENDIF.
+
+  IF wis_extract-saity IS INITIAL.
+    wes_zpari_mc-saity = wls_mc-saity.
+  ENDIF.
+
+
+  SELECT SINGLE stpar FROM zplm_trsco_statu INTO wes_zpari_mc-statut WHERE stplm = wis_extract-statut.
+  IF sy-subrc <> 0.
+    CLEAR wes_zpari_mc-statut.
+  ENDIF.
+
+  SELECT * FROM zpari_modl_compo INTO TABLE wet_modl_compo WHERE basnr = wls_modl-basnr AND mdlnr = wls_modl-mdlnr.
+  LOOP AT wet_modl_compo ASSIGNING <wlf_modl_compo>.
+    <wlf_modl_compo>-basnr = wes_zpari_mc-basnr.
+    <wlf_modl_compo>-mdlnr = wes_zpari_mc-mdlnr.
+  ENDLOOP.
+
+  SELECT * FROM zpari_mc_compo INTO TABLE wet_mc_compo WHERE basnr = wls_mc-basnr AND mdlnr = wls_mc-mdlnr AND color = wls_mc-color.
+  LOOP AT wet_mc_compo ASSIGNING <wlf_mc_compo>.
+    <wlf_mc_compo>-basnr = wes_zpari_mc-basnr.
+    <wlf_mc_compo>-mdlnr = wes_zpari_mc-mdlnr.
+    <wlf_mc_compo>-color = wes_zpari_mc-color.
+  ENDLOOP.
+
+  wes_zpari_mc-z_perimp = wis_extract-perimpl.
+  wes_zpari_mc-z_regfv = wis_extract-regfdv.
+  wes_zpari_mc-debimp = wis_extract-implant.
+  wes_zpari_mc-finimp = wis_extract-findevie.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wes_zpari_mc-matnr
+    IMPORTING
+      output = wes_zpari_mc-matnr.
+
+*AHO - Réinitialisation du classement douanier en cas de reconduction du modèle -  28/08/2024 - Début modification
+  CLEAR : wes_zpari_modl-class_douane,
+          wes_zpari_modl-dt_cl_douane.
+*AHO - 28/08/2024 - Fin modification
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  GET_BASE
+*&---------------------------------------------------------------------*
+*       Récupération de la base PARI
+*----------------------------------------------------------------------*
+FORM get_base USING wiv_saiso TYPE saiso
+                    wiv_saisj TYPE saisj
+                    wiv_ekorg TYPE ekorg
+                    wiv_tribu TYPE zcode_tribu
+           CHANGING wev_basnr TYPE zbasnr
+                    wev_error TYPE flag
+                    ev_recond TYPE zrecond_maj.
+
+  DATA : wlv_key TYPE char255.
+
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wiv_saiso
+    IMPORTING
+      output = wiv_saiso.
+
+  SELECT SINGLE b1~basnr b1~recond
+    FROM zpari_base AS b1
+    INNER JOIN zpari_basetr AS b2 ON b1~basnr = b2~basnr
+    INTO (wev_basnr,ev_recond)
+    WHERE b1~saiso = wiv_saiso
+      AND b1~saisj = wiv_saisj
+      AND b1~ekorg = wiv_ekorg
+      AND b2~tribu = wiv_tribu.
+  IF sy-subrc <> 0.
+    wev_error = 'X'.
+  ENDIF.
+ENDFORM.                    " GET_BASE
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_MDLNR
+*&---------------------------------------------------------------------*
+FORM create_mdlnr CHANGING wev_mdlnr TYPE zmdlnr
+                           wev_error TYPE flag.
+
+
+* Attribution d'un nouveau mdlnr
+  CALL FUNCTION 'NUMBER_GET_NEXT'
+    EXPORTING
+      nr_range_nr = '01'
+      object      = 'ZMDLNR'
+    IMPORTING
+      number      = wev_mdlnr
+    EXCEPTIONS
+      OTHERS      = 8.
+  IF sy-subrc <> 0.
+    wev_error = 'X'.
+  ENDIF.
+
+ENDFORM.                    " CREATE_MDLNR
+FORM move_file_ok USING wiv_filename
+                        wiv_sp TYPE flag.
+
+  DATA : wlv_param    TYPE sxpgcolist-parameters,
+         wlv_src      TYPE char128,
+         wlv_dst      TYPE char128,
+         wlv_status   TYPE c,
+         wlt_protocol TYPE TABLE OF btcxpm,
+         wls_protocol TYPE btcxpm.
+
+  IF wiv_sp IS INITIAL.
+    CONCATENATE p_dir  wiv_filename INTO wlv_src. "repertoire source
+    CONCATENATE p_arch wiv_filename INTO wlv_dst. "repertoire archive
+  ELSE.
+    CONCATENATE p_dir2  wiv_filename INTO wlv_src. "repertoire source
+    CONCATENATE p_arch2 wiv_filename INTO wlv_dst. "repertoire archive
+  ENDIF.
+
+  CONCATENATE wlv_src wlv_dst INTO wlv_param SEPARATED BY space.
+
+* Message : Déplacement du fichier &1 vers &2
+  "//PERFORM add_log USING '' wgc_msgid 'I' '022' wlv_src wlv_dst '' ''.
+
+  CALL FUNCTION 'SXPG_COMMAND_EXECUTE'
+    EXPORTING
+      commandname           = 'ZMV'
+      additional_parameters = wlv_param
+    IMPORTING
+      status                = wlv_status
+    TABLES
+      exec_protocol         = wlt_protocol
+    EXCEPTIONS
+      OTHERS                = 1.
+  IF sy-subrc <> 0.
+    "PERFORM add_log USING '' sy-msgid 'E' sy-msgno wiv_filename sy-msgv2
+    "                                 sy-msgv3 sy-msgv4.
+  ELSEIF wlv_status <> 'O'.  "OK
+    "LOOP AT wlt_protocol INTO wls_protocol.
+*     Message : &1 &2 &3 &4
+    "PERFORM add_log USING '' wgc_msgid 'E' '024' wls_protocol-message(32)
+    "                                            wls_protocol-message+32(32)
+    "                                           wls_protocol-message+64(32)
+    "                                          wls_protocol-message+96(32).
+    "ENDLOOP.
+  ELSE.
+*   Message : Fichier &1 déplacé
+    "PERFORM add_log USING '' wgc_msgid 'I' '023' wiv_filename '' '' ''.
+  ENDIF.
+
+ENDFORM.                    " move_file_ok
+*&---------------------------------------------------------------------*
+*&      Form  LOAD_FILES2
+*&---------------------------------------------------------------------*
+FORM load_files2 .
+
+  DATA : wlt_files TYPE TABLE OF epsfili,
+         wls_file  LIKE LINE OF wlt_files.
+
+  DATA : wlv_exist  TYPE flag,
+         wlv_traite TYPE flag.
+
+  DATA :  wlv_mask TYPE epsf-epsfilnam.
+
+  wlv_mask = |SP_*|.
+
+  CALL FUNCTION 'EPS_GET_DIRECTORY_LISTING'
+    EXPORTING
+      dir_name               = p_dir2
+      file_mask              = wlv_mask
+    TABLES
+      dir_list               = wlt_files
+    EXCEPTIONS
+      invalid_eps_subdir     = 1
+      sapgparam_failed       = 2
+      build_directory_failed = 3
+      no_authorization       = 4
+      read_directory_failed  = 5
+      too_many_read_errors   = 6
+      empty_directory_list   = 7
+      OTHERS                 = 8.
+
+  SORT wlt_files.
+
+  LOOP AT wlt_files INTO wls_file.
+
+    CLEAR : wlv_exist, wlv_traite.
+
+    PERFORM chech_file2 USING wls_file-name CHANGING wlv_exist wlv_traite.
+
+    IF wlv_exist IS INITIAL.
+*      TODO Message nouveau fichier intégré et a traité
+      PERFORM read_file USING wls_file-name 'X'.
+      PERFORM move_file_ok USING wls_file-name 'X'.
+    ELSE.
+      IF wlv_traite IS NOT INITIAL.
+*       TODO Message fichier déjà intégré et traité
+      ELSE.
+*        TODO Message fichier déjà intégré et a traité
+        SELECT * FROM zplm_files_load2 APPENDING TABLE wgt_extract2 WHERE file_name_tech = wls_file-name.
+      ENDIF.
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CHECH_FILE2
+*&---------------------------------------------------------------------*
+FORM chech_file2  USING    wiv_file TYPE epsfilnam
+                 CHANGING wev_exist TYPE flag
+                          wev_traite TYPE flag.
+
+  DATA : wls_file_load2 TYPE zplm_files_load2.
+
+*gestion des statuts de la table
+* '' = intégré dans la table
+* 0 = intégré et check effectué avec succés
+* 1 = intégré et traité
+* 2 = intégré et check en erreur
+*
+  SELECT SINGLE * FROM zplm_files_load2 INTO wls_file_load2 WHERE file_name_tech = wiv_file AND ekorg = p_ekorg.
+  IF sy-subrc = 0.
+    wev_exist = 'X'.
+    IF wls_file_load2-statut_tech = 1.
+    ELSE.
+      SELECT SINGLE * FROM zplm_files_load2 INTO wls_file_load2 WHERE file_name_tech = wiv_file AND statut_tech = 1 AND ekorg = p_ekorg.
+      IF sy-subrc = 0.
+        wev_traite = 'X'.
+      ENDIF.
+    ENDIF.
+
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SAVE_BDD2
+*&---------------------------------------------------------------------*
+FORM save_bdd2  TABLES wit_files STRUCTURE zplm_files_load2
+               USING wiv_commit TYPE flag
+                CHANGING wev_subrc TYPE sy-subrc.
+
+  MODIFY zplm_files_load2 FROM TABLE wit_files.
+  IF sy-subrc = 0 AND wiv_commit IS NOT INITIAL.
+    COMMIT WORK AND WAIT.
+  ENDIF.
+
+  wev_subrc = sy-subrc.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  ADD_LINES2
+*&---------------------------------------------------------------------*
+FORM add_lines2 .
+
+  SELECT * FROM  zplm_files_load2 APPENDING TABLE wgt_extract2 WHERE statut_tech = ''  AND ekorg = p_ekorg.
+
+  IF p_error IS NOT INITIAL.
+    SELECT * FROM zplm_files_load2 APPENDING TABLE wgt_extract2 WHERE statut_tech = 2  AND ekorg = p_ekorg.
+    SELECT * FROM zplm_files_load2 APPENDING TABLE wgt_extract2 WHERE statut_tech = 4  AND ekorg = p_ekorg.
+  ENDIF.
+
+  IF p_old IS NOT INITIAL.
+    SELECT * FROM  zplm_files_load2 APPENDING TABLE wgt_extract2 WHERE statut_tech = 0  AND ekorg = p_ekorg.
+  ENDIF.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  DEL_DOUBLON2
+*&---------------------------------------------------------------------*
+FORM del_doublon2 .
+
+  DATA : wls_extract2 LIKE LINE OF wgt_extract2,
+         wlv_tabix    TYPE sy-tabix.
+
+  DATA : wlt_plm_file_load2 TYPE TABLE OF zplm_files_load2,
+         wls_plm_file_load2 LIKE LINE OF wlt_plm_file_load2.
+
+  FIELD-SYMBOLS : <wlf_extract_main> TYPE zplm_files_load2,
+                  <wlf_extract_it>   TYPE zplm_files_load2,
+                  <wlf_extract_bdd>  TYPE zplm_files_load2.
+
+  SORT wgt_extract2 BY file_name_tech DESCENDING num_ligne ASCENDING.
+
+  LOOP AT wgt_extract2 ASSIGNING <wlf_extract_main> WHERE statut_tech <> 3.
+    wlv_tabix = sy-tabix.
+    ADD 1 TO wlv_tabix.
+
+*** On rend obselete les doublons plus vieux en table interne
+    LOOP AT wgt_extract2 ASSIGNING <wlf_extract_it> FROM wlv_tabix WHERE id_plm_simprix = <wlf_extract_main>-id_plm_simprix.
+      <wlf_extract_it>-statut_tech = 3.
+    ENDLOOP.
+
+*** On rend obselete les doublons plus vieux en base de donnée
+    SELECT * FROM zplm_files_load2 INTO TABLE wlt_plm_file_load2 WHERE id_plm_simprix = wls_extract2-id_plm_simprix AND ( statut_tech = '' OR statut_tech = '0' OR statut_tech = '2' OR statut_tech = '4').
+
+    SORT wlt_plm_file_load2 BY file_name_tech num_ligne.
+
+    LOOP AT wlt_plm_file_load2 ASSIGNING <wlf_extract_bdd>.
+
+      READ TABLE wgt_extract2 TRANSPORTING NO FIELDS WITH KEY id_plm_simprix = <wlf_extract_bdd>-id_plm_simprix.      "On check si on la déjà traité en table interne
+      IF sy-subrc <> 0 . "si on ne l'a pas traité en table interne
+        IF <wlf_extract_bdd>-file_name_tech < <wlf_extract_main>-file_name_tech. "si en base de donnée le fichier est plus vieux alors on le rend obselete
+          <wlf_extract_bdd>-statut_tech = 3.
+        ELSE. " si il existe une mise a jour plus récente en bdd, on rend obselete la ligne courante
+          <wlf_extract_main>-statut_tech = 3.
+        ENDIF.
+      ENDIF.
+
+    ENDLOOP.
+  ENDLOOP.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CHECK_DATA2
+*&---------------------------------------------------------------------*
+FORM check_data2 CHANGING wis_extract TYPE zplm_files_load2
+                          wev_return TYPE sy-subrc.
+
+
+  DATA : wlv_number  TYPE int1,
+         wlv_error   TYPE flag,
+         wlv_message TYPE text150.
+
+  DATA : wlv_saiso TYPE saiso,
+         wlv_saisj TYPE saisj,
+         wlv_ekorg TYPE ekorg.
+
+  DATA : wlv_agent    TYPE zzagent,
+         wlv_paval    TYPE zpaval,
+         wlv_compa    TYPE zcommentaire,
+         wlv_landc    TYPE zlandc,
+         wlv_sourcing TYPE zsourcing,
+         wlv_lifnr    TYPE lifnr,
+         wlv_zzexpvz  TYPE expvz,
+         wlv_inco1    TYPE inco1,
+         wlv_inco2    TYPE inco2,
+         wlv_zzherkl  TYPE zzherkl,
+         wlv_devpa    TYPE zdevpa,
+         wlv_zzevers  TYPE evers,
+         wlv_selected TYPE zselected.
+
+
+  DATA : wls_pari_sourcing    TYPE zpari_sourcing,
+         wls_lfm1             TYPE lfm1,
+         wls_ztransitaire     TYPE ztransitaire,
+         wls_zpari_adm_transp TYPE zpari_adm_transp,
+         wls_t005             TYPE t005,
+         wls_tcurc            TYPE tcurc.
+
+
+* BEGIN INSERT RZE RICEF-100
+  "LIFNR
+  IF wis_extract-lifnr IS INITIAL.
+    wev_return = 2.
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'Numéro de compte fournisseur obligatoire'.
+  ENDIF.
+  "PAVAL
+  IF wis_extract-paval IS INITIAL.
+    wlv_paval = wis_extract-paval.
+    wev_return = 2.
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'PAVAL non renseigné !'.
+  ENDIF.
+  "DEVPA
+  IF wis_extract-devpa IS INITIAL.
+    wev_return = 2.
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'Devise prix d achat obligatoire'.
+  ENDIF.
+  "INCO1
+  IF wis_extract-inco1 IS INITIAL.
+    wev_return = 2.
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'Incoterms partie 1 obligatoire'.
+  ENDIF.
+  "INCO2
+  IF wis_extract-inco2 IS INITIAL.
+    wev_return = 2.
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'Incoterms partie 2 obligatoire'.
+  ENDIF.
+  "ZZEXPVZ
+  IF wis_extract-zzexpvz IS INITIAL.
+    wev_return = 2.
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'Mode de transport pour commerce extérieur obligatoire'.
+  ENDIF.
+  "ZZEVERS
+  IF wis_extract-zzevers IS INITIAL.
+    wev_return = 2.
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'Mode de transport pour commerce extérieur obligatoire'.
+  ENDIF.
+  "ZZHERKL
+  IF wis_extract-zzherkl IS INITIAL.
+    wev_return = 2.
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'Pays d origine de l article obligatoire'.
+  ENDIF.
+*  "ZZVERLD
+*  IF wis_extract-zzverld IS INITIAL.
+*    wev_return = 2.
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'Pays d envoi du poste de la commande obligatoire'.
+*  ENDIF.
+* END INSERT RZE RICEF-100
+
+* BEGIN DELETE RZE RICEF-100
+*  "non obligatoire
+**  paval
+*  IF wis_extract-paval IS INITIAL.
+*    wlv_paval = wis_extract-paval.
+*    wev_return = 2.
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number wev_return 'PAVAL non renseigné !'.
+*  ENDIF.
+**  landc "pour l'instant non
+*
+*
+*
+*  "Obligatoire
+**  sourcing "vérifier que le sourcing existe dans la table ZPARI_SOURCING zone "SOURCING"
+*  wlv_sourcing = wis_extract-sourcing.
+*  SELECT SINGLE * FROM zpari_sourcing INTO wls_pari_sourcing WHERE sourcing = wlv_sourcing AND spras = sy-langu.
+*  IF sy-subrc <> 0.
+*    wev_return = sy-subrc.
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number sy-subrc 'Sourcing n’existe pas dans SAP'.
+*  ENDIF.
+*
+**  lifnr "vérifier que "LIFNR"+"KALSK2" existent dans "LFM1" (le "KALSK2" est récupérer de la table "ZPARI_SOURCING"en renseignant la zone "SOURCING")
+*  wlv_lifnr = wis_extract-lifnr.
+*  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+*    EXPORTING
+*      input  = wlv_lifnr
+*    IMPORTING
+*      output = wlv_lifnr.
+*
+*  wlv_ekorg = wis_extract-ekorg.
+*  SELECT SINGLE * FROM lfm1 INTO wls_lfm1 WHERE lifnr = wlv_lifnr AND ekorg = wlv_ekorg.
+*  IF sy-subrc <> 0.
+*    wev_return = sy-subrc.
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number sy-subrc 'LIFNR n’existe pas dans SAP'.
+*  ENDIF.
+*
+**  zzexpvz "vérifier que "INCO2"+"EXPVZ"(mode de transport)existe dans "ztransitaire" et que c'est actif
+**  inco2 "vérifier que "vérifier que "INCO2"+"EXPVZ"(mode de transport)existe dans "ztransitaire" et que c'est actif
+*  wlv_zzexpvz = wis_extract-zzexpvz.
+*  wlv_inco2 = wis_extract-inco2.
+*  SELECT SINGLE * FROM ztransitaire INTO wls_ztransitaire WHERE inco2 = wlv_inco2 AND expvz = wlv_zzexpvz.
+*  IF sy-subrc <> 0.
+*    wev_return = sy-subrc.
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number sy-subrc 'INCO2 et EXPVZ n’existe pas dans SAP'.
+*  ENDIF.
+*
+**  inco1 "Vérifier que "INCO1"+"MODETR"+"CSGEXPE"+S"OURCING" existe  dans la table  "zpari_adm_transp"
+**  zzevers "à  remettre en obligatoire et à vérifier dans la combinaison dans zpari_adm_transp
+*  wlv_inco1 = wis_extract-inco1.
+*  wlv_ekorg = wis_extract-ekorg.
+*  wlv_sourcing = wis_extract-sourcing.
+*  wlv_zzexpvz = wis_extract-zzexpvz.
+*  wlv_zzevers = wis_extract-zzevers.
+*  SELECT SINGLE * FROM zpari_adm_transp INTO wls_zpari_adm_transp WHERE ekorg = wlv_ekorg AND inco1 = wlv_inco1 AND sourcing = wlv_sourcing AND expvz = wlv_zzexpvz AND evers = wlv_zzevers.
+*  IF sy-subrc <> 0.
+*    wev_return = sy-subrc.
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number sy-subrc 'INCO1 et EVERS n’existe pas dans SAP'.
+*  ENDIF.
+*
+**  zzherkl "vérifier que le pays existe dans la table T005 zone"LAND1"
+*  wlv_zzherkl = wis_extract-zzherkl.
+*  SELECT SINGLE * FROM t005 INTO wls_t005 WHERE land1 = wlv_zzherkl.
+*  IF sy-subrc <> 0.
+*    wev_return = sy-subrc.
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number sy-subrc 'zzherkl n’existe pas dans SAP'.
+*  ENDIF.
+*
+**  devpa "vérifier que "DEVPA" existe dans la table tcurc zone "TSOCD"
+*  wlv_devpa = wis_extract-devpa.
+*  SELECT SINGLE * FROM tcurc INTO wls_tcurc WHERE isocd = wlv_devpa.
+*  IF sy-subrc <> 0.
+*    wev_return = sy-subrc.
+*    ADD 1 TO wlv_number.
+*    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number sy-subrc 'devpa n’existe pas dans SAP'.
+*  ENDIF.
+* END DELETE RZE RICEF-100
+
+  wis_extract-timestamp_tech = |{ sy-datum }{ sy-uzeit }|.
+
+  IF wev_return IS INITIAL OR wev_return = '2'.
+    wis_extract-statut_tech = 0.
+  ELSE.
+    wis_extract-statut_tech = wev_return.
+  ENDIF.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  ADDLOG2
+*&---------------------------------------------------------------------*
+FORM addlog2  USING   wiv_id_plm_simprix  TYPE zid_plm_simprix
+                      wiv_number    TYPE int1
+                      wiv_subrc     TYPE sy-subrc
+                      wiv_message   TYPE text150.
+
+
+  DATA : wls_log TYPE zplm_log2.
+
+  wls_log-mandt = sy-mandt.
+  wls_log-id_plm_simprix = wiv_id_plm_simprix.
+  wls_log-line_return = wiv_number.
+  wls_log-code_return = wiv_subrc.
+  wls_log-message = wiv_message.
+  wls_log-timestamp = |{ sy-datum }{ sy-uzeit }|.
+
+  APPEND wls_log TO wgt_log2.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  SAVE_LOG2
+*&---------------------------------------------------------------------*
+FORM save_log2  USING wiv_commit TYPE flag.
+
+  DATA : wls_log             LIKE LINE OF wgt_log2,
+         wlr_id_plm_simprix  TYPE RANGE OF zid_plm_simprix,
+         wlrs_id_plm_simprix LIKE LINE OF wlr_id_plm_simprix.
+
+  wlrs_id_plm_simprix = 'IEQ'.
+  LOOP AT wgt_log2 INTO wls_log.
+    wlrs_id_plm_simprix-low = wls_log-id_plm_simprix.
+    APPEND wlrs_id_plm_simprix TO wlr_id_plm_simprix.
+  ENDLOOP.
+
+  CHECK wlr_id_plm_simprix IS NOT INITIAL.
+
+  DELETE FROM zplm_log2 WHERE id_plm_simprix IN wlr_id_plm_simprix.
+
+  MODIFY zplm_log2 FROM TABLE wgt_log2.
+
+  IF wiv_commit IS NOT INITIAL.
+    COMMIT WORK AND WAIT.
+  ENDIF.
+
+  REFRESH wgt_log2.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  INTEG_PARI2
+*&---------------------------------------------------------------------*
+FORM integ_pari2  TABLES wit_extract STRUCTURE zplm_files_load2.
+
+
+  DATA : wlv_statut TYPE char1,
+         wlv_number TYPE int1.
+
+  DATA : wlv_basnr TYPE zbasnr,
+         wlv_mdlnr TYPE zmdlnr,
+         wlv_error TYPE flag.
+
+  DATA : wlt_zpari_simprix TYPE TABLE OF zpari_simprix.
+
+  DATA : wls_pari_simprix TYPE zpari_simprix.
+  DATA : wlt_simprix_old TYPE TABLE OF zpari_simprix,
+         wls_simprix_old LIKE LINE OF wlt_simprix_old.
+
+  DATA : lv_recond TYPE zrecond_maj. " + ABAP-389
+
+
+  FIELD-SYMBOLS: <wlf_extract> TYPE zplm_files_load2.
+
+  LOOP AT wit_extract ASSIGNING <wlf_extract>.
+
+    CLEAR : wlv_statut,wls_pari_simprix.
+
+
+*   On determine le numero de base
+    PERFORM get_base USING <wlf_extract>-saiso <wlf_extract>-saisj <wlf_extract>-ekorg <wlf_extract>-tribu
+                    CHANGING wlv_basnr wlv_error lv_recond.
+    IF wlv_error IS NOT INITIAL.
+      <wlf_extract>-statut_tech = '4'.
+      ADD 1 TO wlv_number.
+      PERFORM addlog2 USING <wlf_extract>-id_plm_simprix wlv_number '4' 'Impossible de déterminer la base'.
+    ENDIF.
+
+**   On determine le numero de base
+*    PERFORM get_base2 USING <wlf_extract>-idmodele
+*                    CHANGING wlv_basnr wlv_mdlnr wlv_error.
+*    IF wlv_error IS NOT INITIAL.
+*      <wlf_extract>-statut_tech = '4'.
+*      ADD 1 TO wlv_number.
+*      PERFORM addlog USING <wlf_extract>-id_plm_simprix wlv_number '4' 'Impossible de déterminer la base'.
+*    ENDIF.
+
+*   On determine le statut de la simulation de prix
+    PERFORM get_statut2 USING <wlf_extract> CHANGING wlv_statut.
+
+    IF wlv_statut = 'E'.
+      <wlf_extract>-statut_tech = '4'.
+      ADD 1 TO wlv_number.
+      PERFORM addlog USING <wlf_extract>-id_plm_simprix wlv_number '4' 'Statut impossible à déterminer'.
+    ENDIF.
+
+    IF <wlf_extract>-statut_tech = 0.
+      IF wlv_statut = 'C'.
+        PERFORM c CHANGING <wlf_extract> wlv_basnr wls_pari_simprix.
+      ELSEIF wlv_statut = 'M'.
+        PERFORM m CHANGING <wlf_extract> wlv_basnr wls_pari_simprix.
+      ENDIF.
+    ENDIF.
+
+    IF <wlf_extract>-statut_tech = 0.
+
+      <wlf_extract>-statut_tech = 1.
+      MODIFY zplm_files_load2 FROM <wlf_extract>.
+
+*      MODIFY zpari_simprix FROM wls_pari_simprix.
+*      COMMIT WORK AND WAIT.
+      REFRESH wlt_zpari_simprix.
+      APPEND wls_pari_simprix TO wlt_zpari_simprix.
+
+
+
+*&- Pour une base/modèle, il ne devrait y avoir qu’une seule simulation de prix principale
+      CLEAR: wlv_mdlnr, wlt_simprix_old[], wls_simprix_old.
+      SELECT SINGLE mdlnr INTO wlv_mdlnr FROM zpari_modl WHERE idplm_modl = <wlf_extract>-idmodele.
+      SELECT * FROM zpari_simprix INTO TABLE wlt_simprix_old WHERE basnr = wlv_basnr AND mdlnr = wlv_mdlnr.
+
+      FIELD-SYMBOLS <fs_simul_old> LIKE LINE OF wlt_simprix_old.
+      IF ( <wlf_extract>-selected = 'true' OR <wlf_extract>-selected = 'X' ) AND wlt_simprix_old IS NOT INITIAL.
+        LOOP AT wlt_simprix_old ASSIGNING <fs_simul_old>.
+          <fs_simul_old>-selected = ''.
+        ENDLOOP.
+        MODIFY zpari_simprix FROM TABLE wlt_simprix_old.
+      ENDIF.
+
+      CALL FUNCTION 'Z_PARI_UPD_SIMPRIX'
+        EXPORTING
+          wiv_commit      = 'X'
+        TABLES
+          wit_simprix_new = wlt_zpari_simprix.
+
+    ELSE.
+      MODIFY zplm_files_load2 FROM <wlf_extract>.
+      PERFORM save_log2 USING ''.
+      COMMIT WORK AND WAIT.
+    ENDIF.
+
+  ENDLOOP.
+
+  IF wlt_zpari_simprix IS NOT INITIAL.
+* MAJ des simprix
+    CALL FUNCTION 'Z_PARI_UPD_SIMPRIX'
+      EXPORTING
+        wiv_commit      = 'X'
+      TABLES
+        wit_simprix_new = wlt_zpari_simprix.
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  GET_STATUT2
+*&---------------------------------------------------------------------*
+FORM get_statut2  USING    wiv_extract TYPE zplm_files_load2
+                 CHANGING wev_statut TYPE char1.
+
+  DATA : wls_simprix TYPE zpari_simprix.
+
+  SELECT SINGLE * FROM zpari_simprix INTO wls_simprix WHERE id_plm_simprix = wiv_extract-id_plm_simprix.
+  IF sy-subrc = 0.
+    wev_statut = 'M'.
+  ELSE.
+    wev_statut = 'C'.
+  ENDIF.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  C
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      <--P_<WLF_EXTRACT>  text
+*      <--P_WLS_PARI_SIMPRIX  text
+*----------------------------------------------------------------------*
+FORM c CHANGING  wis_extract        TYPE zplm_files_load2
+                 wiv_basnr          TYPE zbasnr
+                wes_zpari_simprix   TYPE zpari_simprix.
+
+  DATA : wlv_number TYPE int1,
+         wlv_lifnr  TYPE lifnr.
+
+  DATA : wlv_mdlnr TYPE zmdlnr.
+  DATA : wlv_waers TYPE waers.          "INS RZE 26/03/2024 ABAP-1132
+
+  wlv_lifnr = wis_extract-lifnr.
+  CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+    EXPORTING
+      input  = wlv_lifnr
+    IMPORTING
+      output = wlv_lifnr.
+
+  SELECT SINGLE mdlnr waers INTO  (wlv_mdlnr, wlv_waers)       "UPD RZE 26/03/2024 ABAP-1132
+                            FROM  zpari_modl
+                            WHERE idplm_modl = wis_extract-idmodele.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number '4' 'Modele impossible à determiner'.
+  ENDIF.
+
+  PERFORM inc_simnr USING wiv_basnr wlv_mdlnr CHANGING wes_zpari_simprix-simnr wis_extract-statut_tech.
+
+  MOVE-CORRESPONDING wis_extract TO wes_zpari_simprix.      "INSERT RZE ABAP-388 05062023
+
+  "BEGIN INS RZE 26/03/2024 ABAP-1132
+*DEVPR
+  wes_zpari_simprix-devpr = wlv_waers.
+  "END INS RZE 26/03/2024 ABAP-1132
+
+  wes_zpari_simprix-mandt = sy-mandt.
+  wes_zpari_simprix-basnr = wiv_basnr.
+  wes_zpari_simprix-mdlnr = wlv_mdlnr.
+
+  wes_zpari_simprix-zzevers = wis_extract-zzevers.
+
+  wes_zpari_simprix-sourcing = wis_extract-sourcing.
+  wes_zpari_simprix-lifnr = wlv_lifnr.
+  wes_zpari_simprix-inco1 = wis_extract-inco1.
+  wes_zpari_simprix-zzexpvz = wis_extract-zzexpvz.
+  wes_zpari_simprix-paval = wis_extract-paval.
+  wes_zpari_simprix-devpa = wis_extract-devpa.
+  wes_zpari_simprix-id_plm_simprix = wis_extract-id_plm_simprix.
+  wes_zpari_simprix-zzherkl = wis_extract-zzherkl.
+
+  wes_zpari_simprix-erdat = sy-datum.
+  wes_zpari_simprix-ernam = sy-uname.
+  wes_zpari_simprix-aedat = sy-datum.
+  wes_zpari_simprix-aenam = sy-uname.
+
+
+
+  wes_zpari_simprix-land1 = 'FR'.
+  wes_zpari_simprix-flg_paval = 'X'.
+
+
+*   récupération des valeurs de ztransitaire
+  SELECT SINGLE a~lifn2 a~inco2 a~zzverld b~zolla
+    FROM ztransitaire AS a
+    INNER JOIN t615t  AS b ON a~ladel = b~bezei
+    INTO (wes_zpari_simprix-zztrans,
+          wes_zpari_simprix-inco2,
+          wes_zpari_simprix-zzverld,
+          wes_zpari_simprix-zolla)
+    WHERE a~inco2 = wis_extract-inco2
+      AND a~zinactif <> 'X'
+      AND a~expvz = wis_extract-zzexpvz
+      AND b~spras = 'FR'
+      AND b~land1 = 'FR'.
+  IF sy-subrc <> 0.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number '4' 'Erreur valeur transitaire'.
+  ENDIF.
+
+*recherche de l'agent dans la fiche fournisseur
+  SELECT SINGLE lifn2
+    FROM wyt3
+    INTO wes_zpari_simprix-zzagent
+    WHERE lifnr = wlv_lifnr
+      AND ekorg = wis_extract-ekorg
+      AND parvw = 'ZA'.
+  IF sy-subrc <> 0.
+    CLEAR wes_zpari_simprix-zzagent.
+  ENDIF.
+
+  DATA : wls_adm_pays TYPE zpari_adm_pays.
+  SELECT SINGLE * FROM zpari_adm_pays INTO wls_adm_pays WHERE ekorg = p_ekorg AND saiso = wis_extract-saiso AND saisj = wis_extract-saisj AND land1 = wes_zpari_simprix-land1.
+  IF sy-subrc = 0.
+    wes_zpari_simprix-werks = wls_adm_pays-werks.
+  ENDIF.
+
+  IF wis_extract-selected = 'true'.
+    wes_zpari_simprix-selected = '@01@'.
+* BEGIN INSERT RZE 13/02/2024 ABAP-932
+  ELSE.
+    CLEAR wes_zpari_simprix-selected.
+  ENDIF.
+* END INSERT RZE 13/02/2024 ABAP-932
+
+****Non MAJ****
+*FACONNIER
+*ZZKNA1_LAND1
+*ZZHERKL
+*GSP
+*PAOBJ
+*DEVPAO
+*PROBJ
+*DEVPRO
+*TMOBJ
+*PACOM
+*DEVPAC
+*PRCOM
+*DEVPRC
+*TMCOM
+*PRVAL
+*TMVAL
+*COMPA
+*RELIF
+*OKORIG
+*WKURS
+*IDNLF
+*DS
+*PEINH
+****Non MAJ****
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  M
+*&---------------------------------------------------------------------*
+FORM m  CHANGING  wis_extract           TYPE zplm_files_load2
+                  wiv_basnr             TYPE zbasnr
+                  wes_zpari_simprix     TYPE zpari_simprix.
+
+  DATA : wlv_number TYPE int1,
+         wlv_mdlnr  TYPE zmdlnr.
+
+  SELECT SINGLE * FROM zpari_simprix INTO wes_zpari_simprix WHERE id_plm_simprix = wis_extract-id_plm_simprix.
+  IF sy-subrc = 0.
+
+    wes_zpari_simprix-sourcing = wis_extract-sourcing.
+    wes_zpari_simprix-zzexpvz = wis_extract-zzexpvz.
+    wes_zpari_simprix-inco1 = wis_extract-inco1.
+    wes_zpari_simprix-inco2 = wis_extract-inco2.
+    wes_zpari_simprix-zzherkl = wis_extract-zzherkl.
+    wes_zpari_simprix-paval = wis_extract-paval.
+    wes_zpari_simprix-compa = wis_extract-compa.
+    wes_zpari_simprix-zzevers = wis_extract-zzevers.
+    wes_zpari_simprix-gsp = wis_extract-gsp. "+MAL ABAP-695 - DEVK9A9OXP
+
+    IF wis_extract-selected = 'true'.
+      wes_zpari_simprix-selected = '@01@'.
+    ELSE.
+      CLEAR wes_zpari_simprix-selected.
+    ENDIF.
+
+
+  ELSE.
+    wis_extract-statut_tech = '4'." pas d'intégration dans PARI
+    ADD 1 TO wlv_number.
+    PERFORM addlog2 USING wis_extract-id_plm_simprix wlv_number '4' 'Impossible d''identifier la simulation de prix'.
+  ENDIF.
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  INC_SIMNR
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM inc_simnr USING  wiv_basnr TYPE zbasnr
+                      wiv_mdlnr TYPE zmdlnr
+            CHANGING wev_simnr TYPE zsimnr
+                     wev_error TYPE zplm_statut.
+
+  DATA : wlt_simprix TYPE TABLE OF zpari_simprix,
+         wls_simprix LIKE LINE OF wlt_simprix.
+
+  SELECT * FROM zpari_simprix INTO TABLE wlt_simprix WHERE basnr = wiv_basnr AND mdlnr = wiv_mdlnr ORDER BY simnr DESCENDING.
+  READ TABLE wlt_simprix INTO wls_simprix INDEX 1.
+  wev_simnr = wls_simprix-simnr + 1.
+
+ENDFORM.                    " INC_SIMNR
+*&---------------------------------------------------------------------*
+*&      Form  ADAPT_TABLE
+*&---------------------------------------------------------------------*
+FORM adapt_table  TABLES   wit_modl_compo STRUCTURE zpari_modl_compo
+                           wit_mc_compo STRUCTURE zpari_mc_compo
+                           wet_modl_upd STRUCTURE zspari_modl_upd
+                           wet_modlt_upd STRUCTURE zpari_modlt
+                           wet_mc_upd STRUCTURE zspari_mc_upd
+                           wet_modl_compo_upd STRUCTURE zspari_modl_compo_upd
+                           wet_mc_compo_upd STRUCTURE zspari_mc_compo_upd
+                  USING    wis_statut_mdl TYPE char1
+                           wis_statut_mc TYPE char1
+                           wis_zpari_modl TYPE zpari_modl
+                           wis_zpari_modlt TYPE zpari_modlt
+                           wis_zpari_mc TYPE zpari_mc
+                  CHANGING wes_base_sel TYPE zpari_base_sel.
+
+
+  DATA : wls_modl_compo     LIKE LINE OF wit_modl_compo,
+         wls_mc_compo       LIKE LINE OF wit_mc_compo,
+         wls_modl_upd       LIKE LINE OF wet_modl_upd,
+         wlt_modlt_upd      LIKE LINE OF wet_modlt_upd,
+         wlt_mc_upd         LIKE LINE OF wet_mc_upd,
+         wlt_modl_compo_upd LIKE LINE OF wet_modl_compo_upd,
+         wlt_mc_compo_upd   LIKE LINE OF wet_mc_compo_upd.
+
+
+  CASE wis_statut_mdl.
+    WHEN 'C' OR 'R'.
+    WHEN 'M'.
+    WHEN OTHERS.
+  ENDCASE.
+
+  CASE wis_statut_mc.
+    WHEN 'C' OR 'R'.
+    WHEN 'M'.
+    WHEN OTHERS.
+  ENDCASE.
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CALL_API_PLM_MODULE_LINEAIRE
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_WIS_EXTRACT_LAYGR  text
+*      <--P_WLS_TWMLT_LTEXT  text
+*----------------------------------------------------------------------*
+FORM call_api_plm_module_lineaire  USING    uv_laygr TYPE laygr
+                                   CHANGING cv_text TYPE lm_bez_40
+                                            cv_error TYPE string.
+
+
+**********************************************************************
+  DATA: BEGIN OF wls_session,
+          username TYPE string, "User
+          password TYPE string, "password
+        END OF wls_session,
+        BEGIN OF wls_module,
+          code TYPE string,
+        END OF wls_module,
+        BEGIN OF wls_json_res,
+          status TYPE string,  "<success|error>",
+          errors TYPE TABLE OF string,
+          data   TYPE TABLE OF string,
+        END OF wls_json_res,
+        BEGIN OF wls_res_session,
+          token TYPE string,
+        END OF wls_res_session,
+        BEGIN OF wls_res_module,
+          node_name TYPE string,
+        END OF wls_res_module,
+        wlt_module       LIKE TABLE OF wls_res_module,
+        wlv_req_data     TYPE string,
+        wlv_req_data_esc TYPE string,
+        wlv_body         TYPE string,
+        wlv_res_data     TYPE string,
+        wlo_client       TYPE REF TO if_http_client,
+        wlo_client2      TYPE REF TO if_http_client,
+        wlv_status       TYPE i.
+
+  DATA : wlv_service TYPE string,
+*         wlv_status  TYPE i,
+         wlv_msg     TYPE string,
+         wlv_auth    TYPE string,
+         wlv_ssl_id	 TYPE ssfapplssl.
+
+  DATA : wlv_hostname  TYPE string,
+         wlv_srb_token TYPE string.
+  DATA: wlv_value  TYPE string, wlv_domain TYPE string, wlv_expire TYPE string.
+  DATA wlv_secure TYPE i.
+
+  DATA : wlo_ws          TYPE REF TO zcl_ws,
+         wlt_header      TYPE tihttpnvp,
+         wls_header      LIKE LINE OF  wlt_header,
+         wlt_form_fields TYPE tihttpnvp,
+         wls_form_fields LIKE LINE OF  wlt_form_fields.
+  DATA error_code TYPE int3.
+
+
+  wls_session-username = 'AdminSAP'.
+  wls_session-password = 'Centric01$'.
+
+
+**********************************************************************
+
+*&- connexion centric - get token
+  wlv_req_data = /ui2/cl_json=>serialize( data = wls_session
+      pretty_name = 'L' ).
+
+  IF sy-sysid = 'PRD'.
+*    wlv_hostname = 'http://plmas11.groupe.ad.etam/csi-requesthandler/api/v2'.   "DEL ABAP-1293
+    wlv_hostname = gv_url_prd.                                                   "INS ABAP-1293
+  ELSE.
+*    wlv_hostname = 'http://plmas12.groupe.ad.etam/csi-requesthandler/api/v2'.   "DEL ABAP-1293
+    wlv_hostname = gv_url_test.                                                  "INS ABAP-1293
+  ENDIF.
+
+  wlv_service = wlv_hostname && '/session'.
+
+  IF wlv_hostname(5) = 'https'.
+    wlv_ssl_id = 'ANONYM'.
+  ENDIF.
+
+  cl_http_client=>create_by_url(
+    EXPORTING
+      url           = wlv_service
+      ssl_id        = wlv_ssl_id
+    IMPORTING
+      client = wlo_client ).
+
+  wlo_client->request->set_method( 'POST' ).
+  wlo_client->request->set_header_field( name = 'Accept'  value = 'application/json' ).
+
+  wlo_client->request->set_content_type( 'application/json' ).
+  wlo_client->request->set_cdata( wlv_req_data ).
+
+  CALL METHOD wlo_client->send
+    EXPORTING
+      timeout                    = 15
+    EXCEPTIONS
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      OTHERS                     = 3.
+  IF sy-subrc <> 0.
+    CALL METHOD wlo_client->get_last_error
+      IMPORTING
+        message = cv_error.
+  ENDIF.
+
+  wlo_client->receive(
+    EXCEPTIONS
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      http_processing_failed     = 3 ).
+  IF sy-subrc <> 0.
+    CALL METHOD wlo_client->get_last_error
+      IMPORTING
+        message = cv_error.
+  ENDIF.
+
+  wlv_res_data = wlo_client->response->get_cdata( ).
+
+  /ui2/cl_json=>deserialize( EXPORTING
+    json = wlv_res_data
+    pretty_name = 'L'
+    CHANGING
+       data = wls_res_session ).
+
+  IF wls_res_session-token IS INITIAL.
+    cv_error = 'erreur session'.
+    EXIT.
+  ENDIF.
+
+
+
+  "GET libelle module linaire
+
+  wls_module-code = uv_laygr.
+
+  wlv_req_data = /ui2/cl_json=>serialize( data = wls_module
+      pretty_name = 'L' ).
+
+
+  IF sy-sysid = 'PRD'.
+*    wlv_hostname = 'http://plmas11.groupe.ad.etam/csi-requesthandler/api/v2'.      "DEL ABAP-1293
+    wlv_hostname = gv_url_prd.                                                      "INS ABAP-1293
+  ELSE.
+*    wlv_hostname = 'http://plmas12.groupe.ad.etam/csi-requesthandler/api/v2'.      "DEL ABAP-1293
+    wlv_hostname = gv_url_test.                                                     "INS ABAP-1293
+  ENDIF.
+  wlv_service = wlv_hostname && '/lookup_items?code=' && uv_laygr.
+
+
+  IF wlv_hostname(5) = 'https'.
+    wlv_ssl_id = 'ANONYM'.
+  ENDIF.
+
+  cl_http_client=>create_by_url(
+    EXPORTING
+      url           = wlv_service
+      ssl_id        = wlv_ssl_id
+    IMPORTING
+      client = wlo_client2 ).
+
+  wlo_client2->request->set_method( 'GET' ).
+  wlo_client2->request->set_header_field( name = 'Accept'  value = 'application/json' ).
+
+  DATA : wlv_1 TYPE string,
+         wlv_2 TYPE string.
+
+  SPLIT  wls_res_session-token AT '=' INTO wlv_1 wlv_2.
+
+  wlo_client->response->get_cookie( EXPORTING name = 'JSESSIONID' IMPORTING value = wlv_value domain = wlv_domain expires = wlv_expire secure = wlv_secure ).
+
+  CONCATENATE 'JSESSIONID=' wlv_value ';' wls_res_session-token INTO wlv_2.
+
+  wlo_client2->request->set_cookie( name = 'JSESSIONID' value = wlv_value ).
+  wlo_client2->request->set_header_field( name = 'Cookie'  value = wlv_2 ).
+  wlo_client2->request->set_content_type( 'application/json' ).
+
+  CALL METHOD wlo_client2->send
+    EXPORTING
+      timeout                    = 15
+    EXCEPTIONS
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      OTHERS                     = 3.
+  IF sy-subrc <> 0.
+    CALL METHOD wlo_client2->get_last_error
+      IMPORTING
+        message = cv_error.
+    RETURN.
+  ENDIF.
+
+  wlo_client2->receive(
+    EXCEPTIONS
+      http_communication_failure = 1
+      http_invalid_state         = 2
+      http_processing_failed     = 3 ).
+  IF sy-subrc <> 0.
+    CALL METHOD wlo_client2->get_last_error
+      IMPORTING
+        message = cv_error.
+    RETURN.
+  ENDIF.
+
+  wlv_res_data = wlo_client2->response->get_cdata( ).
+  wlo_client2->close( ).
+  wlo_client->close( ).
+
+  /ui2/cl_json=>deserialize( EXPORTING
+    json = wlv_res_data
+    CHANGING
+       data = wlt_module ).
+
+  IF wlt_module[] IS NOT INITIAL.
+    READ TABLE wlt_module INTO wls_res_module INDEX 1.
+    cv_text = wls_res_module-node_name.
+  ENDIF.
+
+
+**********************************************************************
+
+
+
+*  wlv_req_data = /ui2/cl_json=>serialize( data = wls_session
+*      pretty_name = 'L' ).
+*
+*  PERFORM build_request USING 'POST' '/session' CHANGING wlo_client.
+*  wlo_client->request->set_content_type( 'application/json' ).
+*  wlo_client->request->set_cdata( wlv_req_data ).
+*
+*  CALL METHOD wlo_client->send
+*    EXPORTING
+*      timeout                    = 15
+*    EXCEPTIONS
+*      http_communication_failure = 1
+*      http_invalid_state         = 2
+*      OTHERS                     = 3.
+*  IF sy-subrc <> 0.
+*    CALL METHOD wlo_client->get_last_error
+*      IMPORTING
+*        message = cv_error.
+*    RETURN.
+*  ENDIF.
+*
+*  wlo_client->receive(
+*    EXCEPTIONS
+*      http_communication_failure = 1
+*      http_invalid_state         = 2
+*      http_processing_failed     = 3 ).
+*  IF sy-subrc <> 0.
+*    CALL METHOD wlo_client->get_last_error
+*      IMPORTING
+*        message = cv_error.
+*    RETURN.
+*  ENDIF.
+*
+*  wlv_res_data = wlo_client->response->get_cdata( ).
+*  wlo_client->close( ).
+*
+*  /ui2/cl_json=>deserialize( EXPORTING
+*    json = wlv_res_data
+*    pretty_name = 'L'
+*    CHANGING
+*       data = wls_res_session ).
+*
+*  IF wls_res_session-token IS INITIAL.
+*    cv_error = 'erreur session'.
+*    EXIT.
+*  ENDIF.
+*
+*
+*  wls_module-code = uv_laygr.
+*
+*  wlv_req_data = /ui2/cl_json=>serialize( data = wls_module
+*      pretty_name = 'L' ).
+*
+*
+*  "GET libelle module linaire
+*  PERFORM build_request USING 'GET' '/lookup_items' CHANGING wlo_client.
+*  wlo_client->request->set_content_type( 'application/json' ).
+*
+*  CALL METHOD wlo_client->send
+*    EXPORTING
+*      timeout                    = 15
+*    EXCEPTIONS
+*      http_communication_failure = 1
+*      http_invalid_state         = 2
+*      OTHERS                     = 3.
+*  IF sy-subrc <> 0.
+*    CALL METHOD wlo_client->get_last_error
+*      IMPORTING
+*        message = cv_error.
+*    RETURN.
+*  ENDIF.
+*
+*  wlo_client->receive(
+*    EXCEPTIONS
+*      http_communication_failure = 1
+*      http_invalid_state         = 2
+*      http_processing_failed     = 3 ).
+*  IF sy-subrc <> 0.
+*    CALL METHOD wlo_client->get_last_error
+*      IMPORTING
+*        message = cv_error.
+*    RETURN.
+*  ENDIF.
+*
+*  wlv_res_data = wlo_client->response->get_cdata( ).
+*  wlo_client->close( ).
+*
+*  /ui2/cl_json=>deserialize( EXPORTING
+*    json = wlv_res_data
+*    pretty_name = 'L'
+*    CHANGING
+*       data = wls_res_module ).
+
+
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  BUILD_REQUEST
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_0254   text
+*      -->P_0255   text
+*      -->P_0256   text
+*      <--P_WLO_CLIENT  text
+*----------------------------------------------------------------------*
+FORM build_request USING  wiv_method
+                          wiv_endpoint
+                   CHANGING weo_client TYPE REF TO if_http_client.
+
+
+  DATA : wlv_service TYPE string,
+         wlv_status  TYPE i,
+         wlv_msg     TYPE string,
+         wlv_auth    TYPE string,
+         wlv_ssl_id	 TYPE ssfapplssl.
+
+  DATA : wlv_hostname  TYPE string,
+         wlv_srb_token TYPE string.
+
+  IF sy-sysid = 'PRD'.
+    wlv_hostname = 'http://plmas11/csi-requesthandler/api/v2'.
+  ELSE.
+    wlv_hostname = 'http://plmas12/csi-requesthandler/api/v2'.
+  ENDIF.
+
+
+  wlv_service = wlv_hostname && wiv_endpoint.
+
+
+  IF wlv_hostname(5) = 'https'.
+    wlv_ssl_id = 'ANONYM'.
+  ENDIF.
+
+  cl_http_client=>create_by_url(
+    EXPORTING
+      url           = wlv_service
+*     proxy_host    = '' "wgc_proxy         "-AELY01072021
+*      proxy_service = '' "wgc_port         "-AELY01072021
+      ssl_id        = wlv_ssl_id
+    IMPORTING
+      client = weo_client ).
+
+  weo_client->request->set_method( wiv_method ).
+  weo_client->request->set_header_field( name = 'Accept'  value = 'application/json' ).
+
+
+ENDFORM.
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_CHANGE_POINTER
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_WLV_LAYGR  text
+*----------------------------------------------------------------------*
+FORM create_change_pointer  USING uv_laygr.
+
+  DATA: ls_cdhdr TYPE cdhdr.
+  DATA: lt_cdpos TYPE TABLE OF cdpos.
+  DATA wls_cdpos TYPE cdpos.
+*  FIELD-SYMBOLS: <fs_cdpos> LIKE LINE OF lt_cdpos.
+
+  ls_cdhdr-mandant = sy-mandt.
+  ls_cdhdr-objectclas = 'LAYOUT_MOD'.
+  ls_cdhdr-objectid  = uv_laygr.
+  ls_cdhdr-username = sy-uname.
+  ls_cdhdr-udate = sy-datum.
+  ls_cdhdr-utime = sy-uzeit.
+  ls_cdhdr-tcode = sy-tcode.
+  ls_cdhdr-change_ind = 'I' .
+  ls_cdhdr-langu = sy-langu.
+  ls_cdhdr-version = '000'.
+
+  " Change Pointer Triggered
+  "module linéaire
+  wls_cdpos-mandant = sy-mandt.
+  wls_cdpos-objectclas = 'LAYOUT_MOD'.
+  wls_cdpos-objectid = uv_laygr.
+  wls_cdpos-tabname = 'TWML'.
+  " tabkey : MANDT + uv_laygr
+  CONCATENATE sy-mandt uv_laygr INTO wls_cdpos-tabkey .
+  wls_cdpos-fname =  'KEY'.
+  wls_cdpos-chngind = 'I' . " Update Modification
+  wls_cdpos-text_case = 1 .
+  APPEND wls_cdpos TO lt_cdpos.
+
+  "texte
+  wls_cdpos-tabname = 'TWMLT'.
+  " tabkey : MANDT + uv_laygr + langue
+  CONCATENATE wls_cdpos-tabkey 'F' INTO wls_cdpos-tabkey SEPARATED BY space.
+  APPEND wls_cdpos TO lt_cdpos.
+
+  " SAP Generate Change Pointer BAPI in ABAP
+  CALL FUNCTION 'CHANGE_POINTERS_CREATE'
+    EXPORTING
+      change_document_header   = ls_cdhdr
+    TABLES
+      change_document_position = lt_cdpos
+    EXCEPTIONS
+      duplicate_pointer_id     = 1
+      OTHERS                   = 2.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+  CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'.
+
+
+
+ENDFORM.
+*----------------------------------------------------------------------*
+*      Form  RECUP_TAIVAR
+*----------------------------------------------------------------------*
+*  Récupération de la matrice de taille
+*----------------------------------------------------------------------*
+FORM recup_taivar  USING    p_basnr
+                            p_mdlnr
+                            p_color
+                            ps_extract       TYPE zplm_files_load
+                   CHANGING pt_zpari_mcv     TYPE tt_zpari_mcv
+                            pt_zpari_mcv_pay TYPE tt_zpari_mcv_pay.
+
+  DATA : wls_zpari_mcv     TYPE zpari_mcv,
+         wls_zpari_mcv_pay TYPE zpari_mcv_pay,
+         lv_cnt_min        TYPE i,
+         lv_cnt_max        TYPE i,
+         lv_cnt            TYPE i.
+
+  TYPES : BEGIN OF ty_tv,
+            taille(4),
+            var(1),
+          END OF ty_tv.
+  DATA : lt_tv TYPE TABLE OF ty_tv.
+
+  CLEAR : lv_cnt, wls_zpari_mcv, wls_zpari_mcv_pay.
+
+  SPLIT ps_extract-taivarmc AT ',' INTO TABLE lt_tv.
+
+  LOOP AT lt_tv ASSIGNING FIELD-SYMBOL(<fs_tv>).
+    DATA(lv_length) = strlen( <fs_tv>-taille ).
+    lv_length = lv_length - 1.
+    FIND FIRST OCCURRENCE OF <fs_tv>-taille+lv_length(1) IN sy-abcde MATCH OFFSET lv_cnt.
+    <fs_tv>-taille = <fs_tv>-taille(lv_length).
+
+* Récupération de la taille
+    SELECT SINGLE atzhl FROM cawnt
+                        INTO <fs_tv>-taille
+                        WHERE atinn = '0000000013'    "T30A
+                        AND   spras = 'F'
+                        AND   atwtb = <fs_tv>-taille.
+
+    <fs_tv>-var = lv_cnt + 1.
+  ENDLOOP.
+
+  SORT lt_tv BY var taille.
+
+  wls_zpari_mcv-mandt = sy-mandt.
+  wls_zpari_mcv-basnr = p_basnr.
+  wls_zpari_mcv-mdlnr = p_mdlnr.
+  wls_zpari_mcv-color = p_color.
+  wls_zpari_mcv-landc = ps_extract-landc.
+  wls_zpari_mcv-erdat = sy-datum.
+  wls_zpari_mcv-ernam = sy-uname.
+  wls_zpari_mcv-aedat = sy-datum.
+  wls_zpari_mcv-aenam = sy-uname.
+*  wls_zpari_mcv-zz_repa = ps_extract-zz_repa.           "DEL RZE 31/10/2023 ABAP-846
+
+*  FIND FIRST OCCURRENCE OF ps_extract-varmin IN sy-abcde MATCH OFFSET lv_cnt_min.
+*  FIND FIRST OCCURRENCE OF ps_extract-varmax IN sy-abcde MATCH OFFSET lv_cnt_max.
+
+  lv_cnt_min = ps_extract-varminmc.
+*  lv_cnt_min = lv_cnt_min + 1.
+  lv_cnt_max = ps_extract-varmaxmc.
+*  lv_cnt_max = lv_cnt_max + 1.
+  lv_cnt = lv_cnt_min.
+
+  WHILE lv_cnt <= lv_cnt_max.
+    CLEAR : wls_zpari_mcv-varia, wls_zpari_mcv-taimin, wls_zpari_mcv-taimax.
+
+*    wls_zpari_mcv-varia = lv_cnt + 1.    "15/06/2023
+    wls_zpari_mcv-varia = lv_cnt.         "15/06/2023
+
+    LOOP AT lt_tv INTO DATA(ls_tv)
+                  WHERE var = lv_cnt.
+      IF wls_zpari_mcv-taimin IS INITIAL.
+        wls_zpari_mcv-taimin = ls_tv-taille.
+      ENDIF.
+    ENDLOOP.
+    wls_zpari_mcv-taimax = ls_tv-taille.
+
+    MOVE-CORRESPONDING wls_zpari_mcv TO wls_zpari_mcv_pay.
+
+    APPEND wls_zpari_mcv     TO pt_zpari_mcv.
+    APPEND wls_zpari_mcv_pay TO pt_zpari_mcv_pay.
+    lv_cnt = lv_cnt + 1.
+  ENDWHILE.
+
+  " LANDD (zpari_mcv_pay) à définir
+  " MENGE
+* BEGIN INSERT RZE 31/10/2023 ABAP-846
+*Champ ZPARI_MCV-MENGE : aujourd’hui le champ est écrasé à l’intégration de fichier MC du PLM
+*=> il ne faut pas l'écraser et il ne faut pas modifier la valeur qui s’y trouve
+  LOOP AT pt_zpari_mcv ASSIGNING FIELD-SYMBOL(<fs_zpari_mcv>).
+    SELECT SINGLE menge FROM zpari_mcv
+                        INTO <fs_zpari_mcv>-menge
+                        WHERE basnr = <fs_zpari_mcv>-basnr
+                        AND   mdlnr = <fs_zpari_mcv>-mdlnr
+                        AND   color = <fs_zpari_mcv>-color
+                        AND   varia = <fs_zpari_mcv>-varia.
+  ENDLOOP.
+
+  LOOP AT pt_zpari_mcv_pay ASSIGNING FIELD-SYMBOL(<fs_zpari_mcv_pay>).
+    SELECT SINGLE menge FROM zpari_mcv_pay
+                        INTO <fs_zpari_mcv_pay>-menge
+                        WHERE basnr = <fs_zpari_mcv_pay>-basnr
+                        AND   mdlnr = <fs_zpari_mcv_pay>-mdlnr
+                        AND   color = <fs_zpari_mcv_pay>-color
+                        AND   varia = <fs_zpari_mcv_pay>-varia
+                        AND   landd = <fs_zpari_mcv_pay>-landd.
+  ENDLOOP.
+* END INSERT RZE 31/10/2023 ABAP-846
+ENDFORM.
+
