@@ -10,3 +10,4 @@ pandas
 chromadb
 torchvision
 groq
+ollama
