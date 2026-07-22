@@ -1,5 +1,5 @@
 import re
-from typing import List
+from typing import List, Tuple
 
 
 def parse_abap(code: str):
@@ -306,7 +306,7 @@ def extract_methods(code: str) -> List[str]:
     return unique_preserve_order(filtered)
 
 
-def extract_method_calls_and_handlers(code: str) -> (List[str], List[str]):
+def extract_method_calls_and_handlers(code: str) -> Tuple[List[str], List[str]]:
     method_calls = []
     handler_registrations = []
     # Pattern 1: CALL METHOD object->method or class=>method

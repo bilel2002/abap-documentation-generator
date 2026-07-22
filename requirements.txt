@@ -9,5 +9,4 @@ tqdm
 pandas
 chromadb
 torchvision
-groq
-ollama
+ollama

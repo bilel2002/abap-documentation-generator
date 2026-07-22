@@ -25,3 +25,12 @@ chroma_db/
 # OS files
 .DS_Store
 Thumbs.db
+
+# PyInstaller build artifacts
+# dist/ contains the compiled .exe + all bundled libs (~500MB+) - too large for GitHub
+dist/
+build/
+build_log.txt
+
+# Generated icon (rebuilt by build_icon.py)
+assets/icon.ico

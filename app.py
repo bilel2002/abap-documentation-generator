@@ -18,12 +18,16 @@ import core.extractor as extractor
 import core.cleaner as cleaner
 import core.parser_refactored as parser_refactored
 import core.chroma_integration as chroma_integration
+import core.ui_components as ui_components
 
 # Force reload the working modules and keep the refreshed module objects
 extractor = importlib.reload(extractor)
 cleaner = importlib.reload(cleaner)
 parser_refactored = importlib.reload(parser_refactored)
 chroma_integration = importlib.reload(chroma_integration)
+ui_components = importlib.reload(ui_components)
+
+from PIL import Image
 
 # Fixed model configuration
 MODEL_NAME = "mistral:7b-instruct"
@@ -191,7 +195,7 @@ def filter_context_per_form(form_name, form_body, enriched_data, all_form_bodies
         "internal_tables_used": internal_tables_in_body
     }
 
-def generate_form_doc(form_context, rag_context=None, timeout_seconds=180, model_name="llama3.2:latest", temperature=0.1):
+def generate_form_doc(form_context, rag_context=None, timeout_seconds=180, model_name="mistral:7b-instruct", temperature=0.1):
     """Generate documentation for one form with timeout"""
     # Build system prompt (in French)
     system_prompt = """Vous êtes un spécialiste senior de la documentation technique SAP ABAP avec 15 ans d'expérience dans la documentation des systèmes SAP d'entreprise.
@@ -294,7 +298,7 @@ RÈGLES STRICTES à respecter:
         return f"Error: {str(e)}"
 
 
-def generate_program_documentation(full_abap_code, enriched_data, rag_context=None, timeout_seconds=180, model_name="llama3.2:latest", temperature=0.1):
+def generate_program_documentation(full_abap_code, enriched_data, rag_context=None, timeout_seconds=180, model_name="mistral:7b-instruct", temperature=0.1):
     """Generate documentation for the entire ABAP program."""
     # Build system prompt (in French)
     system_prompt = """Vous êtes un spécialiste senior de la documentation technique SAP ABAP avec 15 ans d'expérience dans la documentation des systèmes SAP d'entreprise.
@@ -408,40 +412,85 @@ def assemble_documentation(program_doc, all_docs):
 
 
 def main():
-    # Page configuration with SAP-inspired theme
+    # Load logo image
+    logo_path = Path(__file__).parent / "assets" / "logo.png"
+    logo_img = None
+    if logo_path.exists():
+        try:
+            logo_img = Image.open(logo_path)
+        except Exception:
+            pass
+
+    # Page configuration with modern theme
     st.set_page_config(
         page_title="Générateur de Documentation ABAP",
-        page_icon="🧑‍💻",
+        page_icon=logo_img if logo_img else "🧑‍💻",
         layout="wide",
         initial_sidebar_state="expanded"
     )
 
+    # Inject custom UI styling
+    ui_components.inject_styles()
+
+    # Base64 encode logo for inline HTML rendering
+    import base64
+    logo_base64 = ""
+    if logo_path.exists():
+        try:
+            with open(logo_path, "rb") as f:
+                logo_base64 = base64.b64encode(f.read()).decode()
+        except Exception:
+            pass
+
     # Sidebar configuration
     with st.sidebar:
-        st.markdown("""
-        <div style='text-align: center; padding: 1rem 0;'>
-            <h1 style='color: #0F4C81; margin-bottom: 0;'>🧑‍💻 ABAP Doc</h1>
-            <p style='color: #64748B; font-size: 0.9rem; margin-top: 0;'>Générateur automatique</p>
-        </div>
-        """, unsafe_allow_html=True)
+        if logo_base64:
+            st.markdown(f"""
+            <div style='text-align: center; padding: 1.5rem 0 1rem 0;'>
+                <div style="display: inline-block; padding: 6px; border-radius: 16px; background: rgba(255, 255, 255, 0.05); margin-bottom: 0.75rem; border: 1px solid rgba(255, 255, 255, 0.1);">
+                    <img src="data:image/png;base64,{logo_base64}" width="64" style="border-radius: 10px; display: block;" />
+                </div>
+                <h2 style='color: #FFFFFF; font-weight: 800; font-size: 1.4rem; margin: 0; background: linear-gradient(135deg, #38bdf8 0%, #1e40af 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; letter-spacing: -0.02em;'>ABAP Doc</h2>
+                <p style='color: #64748B; font-size: 0.85rem; margin-top: 0.25rem;'>Générateur automatique</p>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown("""
+            <div style='text-align: center; padding: 1.5rem 0 1rem 0;'>
+                <h2 style='color: #FFFFFF; font-weight: 800; font-size: 1.4rem; margin: 0; background: linear-gradient(135deg, #38bdf8 0%, #1e40af 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent;'>🧑‍💻 ABAP Doc</h2>
+                <p style='color: #64748B; font-size: 0.85rem; margin-top: 0.25rem;'>Générateur automatique</p>
+            </div>
+            """, unsafe_allow_html=True)
  
-        
         st.divider()
         
-        st.subheader("📊 État système")
         sap_kb_path = Path(__file__).parent / "sap_knowledge_base.json"
+        status_html = ""
         if sap_kb_path.exists():
-            st.success("✅ Base SAP OK")
+            status_html = f"<div style='display: flex; align-items: center; color: #4ade80; font-size: 0.9rem; font-weight: 500;'>{ui_components.ICONS['status_ok']} Base SAP OK</div>"
         else:
-            st.warning("⚠️ Base SAP absente")
+            status_html = f"<div style='display: flex; align-items: center; color: #fbbf24; font-size: 0.9rem; font-weight: 500;'>{ui_components.ICONS['status_warn']} Base SAP absente</div>"
+
+        st.markdown(f"""
+        <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.05); border-radius: 12px; padding: 0.85rem 1rem; margin-top: 0.5rem;">
+            <span style="color: #94A3B8; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 0.5rem;">📊 État système</span>
+            {status_html}
+        </div>
+        """, unsafe_allow_html=True)
         
         st.markdown("---")
-        
-      
 
     # Main content
-    st.title("📚 Générateur de Documentation ABAP")
-    st.markdown("Téléchargez votre code ABAP et obtenez une documentation technique complète automatiquement.")
+    st.markdown(f"""
+    <div style="display: flex; align-items: center; gap: 14px; margin-bottom: 0.5rem; margin-top: 1rem;">
+        <div style="background: linear-gradient(135deg, #0F4C81 0%, #1D70B8 100%); color: white; width: 44px; height: 44px; border-radius: 12px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(15, 76, 129, 0.15);">
+            {ui_components.ICONS['doc']}
+        </div>
+        <h1 style="margin: 0; font-weight: 800; color: #0F172A; font-size: 2.2rem; letter-spacing: -0.03em;">Générateur de Documentation ABAP</h1>
+    </div>
+    <p style="color: #64748B; font-size: 1.05rem; margin-bottom: 1.5rem;">Téléchargez votre code ABAP et obtenez une documentation technique complète automatiquement.</p>
+    """, unsafe_allow_html=True)
+
 
     # File upload section
     st.divider()
@@ -486,90 +535,95 @@ def main():
             
             parsed_data = cached_parse_abap(cleaned_text, get_parser_cache_version())
             
-            # Summary metrics with nicer, spaced-out styling
+            # Summary metrics with custom card grid layout
             st.subheader("📊 Résumé rapide")
             
             # Row 1: Program structure
             st.subheader("📝 Structure du programme")
-            row1_col1, row1_col2, row1_col3, row1_col4 = st.columns(4)
-            with row1_col1:
-                st.metric(
-                    label="Forms",
-                    value=len(parsed_data.get("forms", [])),
-                    delta=f"{len(parsed_data.get('forms', []))} formulaires"
-                )
-            with row1_col2:
-                st.metric(
-                    label="Performs",
-                    value=len(parsed_data.get("performs", [])),
-                    delta=f"{len(parsed_data.get('performs', []))} appels"
-                )
-            with row1_col3:
-                st.metric(
-                    label="Selects",
-                    value=len(parsed_data.get("selects", [])),
-                    delta=f"{len(parsed_data.get('selects', []))} requêtes"
-                )
-            with row1_col4:
-                st.metric(
-                    label="Fonctions",
-                    value=len(parsed_data.get("function_calls", [])),
-                    delta=f"{len(parsed_data.get('function_calls', []))} modules"
-                )
+            kpi_data_1 = [
+                {
+                    "label": "Forms",
+                    "value": len(parsed_data.get("forms", [])),
+                    "detail": f"{len(parsed_data.get('forms', []))} formulaires définis",
+                    "icon": "forms"
+                },
+                {
+                    "label": "Performs",
+                    "value": len(parsed_data.get("performs", [])),
+                    "detail": f"{len(parsed_data.get('performs', []))} appels de PERFORM",
+                    "icon": "performs"
+                },
+                {
+                    "label": "Selects",
+                    "value": len(parsed_data.get("selects", [])),
+                    "detail": f"{len(parsed_data.get('selects', []))} requêtes SQL SELECT",
+                    "icon": "selects"
+                },
+                {
+                    "label": "Fonctions",
+                    "value": len(parsed_data.get("function_calls", [])),
+                    "detail": f"{len(parsed_data.get('function_calls', []))} modules de fonction",
+                    "icon": "functions"
+                }
+            ]
+            st.markdown(ui_components.render_kpi_grid(kpi_data_1), unsafe_allow_html=True)
             
             st.divider()
             
             # Row 2: Data and classes
             st.subheader("🗄️ Données et classes")
-            row2_col1, row2_col2, row2_col3 = st.columns(3)
-            with row2_col1:
-                st.metric(
-                    label="Tables SAP",
-                    value=len(parsed_data.get("sap_tables_used", [])),
-                    delta=f"{len(parsed_data.get('sap_tables_used', []))} tables"
-                )
-            with row2_col2:
-                st.metric(
-                    label="Tables internes",
-                    value=len(parsed_data.get("internal_tables", [])),
-                    delta=f"{len(parsed_data.get('internal_tables', []))} structures"
-                )
-            with row2_col3:
-                st.metric(
-                    label="Classes",
-                    value=len(parsed_data.get("classes", [])),
-                    delta=f"{len(parsed_data.get('classes', []))} classes"
-                )
+            kpi_data_2 = [
+                {
+                    "label": "Tables SAP",
+                    "value": len(parsed_data.get("sap_tables_used", [])),
+                    "detail": f"{len(parsed_data.get('sap_tables_used', []))} tables standard référencées",
+                    "icon": "sap_tables"
+                },
+                {
+                    "label": "Tables internes",
+                    "value": len(parsed_data.get("internal_tables", [])),
+                    "detail": f"{len(parsed_data.get('internal_tables', []))} tables ou structures",
+                    "icon": "internal_tables"
+                },
+                {
+                    "label": "Classes",
+                    "value": len(parsed_data.get("classes", [])),
+                    "detail": f"{len(parsed_data.get('classes', []))} classes définies/utilisées",
+                    "icon": "classes"
+                }
+            ]
+            st.markdown(ui_components.render_kpi_grid(kpi_data_2), unsafe_allow_html=True)
             
             st.divider()
             
-            # Row3: Methods and handlers
+            # Row 3: Methods and handlers
             st.subheader("⚙️ Méthodes et gestionnaires d'événements")
-            row3_col1, row3_col2, row3_col3 = st.columns(3)
-            with row3_col1:
-                st.metric(
-                    label="Méthodes",
-                    value=len(parsed_data.get("methods", [])),
-                    delta=f"{len(parsed_data.get('methods', []))} méthodes"
-                )
-            with row3_col2:
-                st.metric(
-                    label="Appels de méthodes",
-                    value=len(parsed_data.get("method_calls", [])),
-                    delta=f"{len(parsed_data.get('method_calls', []))} appels"
-                )
-            with row3_col3:
-                st.metric(
-                    label="SET HANDLER",
-                    value=len(parsed_data.get("set_handler_registrations", [])),
-                    delta=f"{len(parsed_data.get('set_handler_registrations', []))} enregistrements"
-                )
+            kpi_data_3 = [
+                {
+                    "label": "Méthodes",
+                    "value": len(parsed_data.get("methods", [])),
+                    "detail": f"{len(parsed_data.get('methods', []))} méthodes d'objet",
+                    "icon": "methods"
+                },
+                {
+                    "label": "Appels de méthodes",
+                    "value": len(parsed_data.get("method_calls", [])),
+                    "detail": f"{len(parsed_data.get('method_calls', []))} appels de méthode",
+                    "icon": "code"
+                },
+                {
+                    "label": "SET HANDLER",
+                    "value": len(parsed_data.get("set_handler_registrations", [])),
+                    "detail": f"{len(parsed_data.get('set_handler_registrations', []))} abonnements d'événements",
+                    "icon": "set_handlers"
+                }
+            ]
+            st.markdown(ui_components.render_kpi_grid(kpi_data_3), unsafe_allow_html=True)
             
             st.divider()
             
             # Parsed JSON data
             with st.expander("🔍 Voir les données analysées (JSON)", expanded=False):
-                st.json(parsed_data)
                 json_str = json.dumps(parsed_data, indent=2, ensure_ascii=False)
                 st.download_button(
                     label="📥 Télécharger JSON",
@@ -577,6 +631,7 @@ def main():
                     file_name="parsed_abap.json",
                     mime="application/json"
                 )
+                st.json(parsed_data)
 
         # ===== TAB 3: DOCUMENTATION =====
         with tab_docs:
@@ -584,6 +639,9 @@ def main():
             
             if st.button("🚀 Générer la documentation", type="primary", use_container_width=True):
                 try:
+                    # Placeholder for download buttons at the top of content
+                    download_buttons_placeholder = st.empty()
+                    
                     # Initialize sidebar progress tracking
                     st.session_state.progress_forms = []
                     st.session_state.program_doc_done = False
@@ -813,30 +871,32 @@ def main():
                         status.update(label="✅ Documentation terminée !", state="complete", expanded=False)
                         time.sleep(0.5)
 
+                    # Display final documentation download buttons at the top of content
+                    with download_buttons_placeholder.container():
+                        st.divider()
+                        st.header("📥 Télécharger la documentation")
+                        col1, col2 = st.columns([1, 1])
+                        with col1:
+                            st.download_button(
+                                label="📥 Télécharger en Markdown",
+                                data=final_doc,
+                                file_name="abap_form_documentation.md",
+                                mime="text/markdown",
+                                use_container_width=True
+                            )
+                        with col2:
+                            st.download_button(
+                                label="📥 Télécharger en TXT",
+                                data=final_doc,
+                                file_name="abap_form_documentation.txt",
+                                mime="text/plain",
+                                use_container_width=True
+                            )
+                        st.divider()
+
                     # Display final documentation
                     st.divider()
                     st.header("Documentation finale")
-                    
-                    # Download buttons
-                    col1, col2 = st.columns([1, 1])
-                    with col1:
-                        st.download_button(
-                            label="📥 Télécharger en Markdown",
-                            data=final_doc,
-                            file_name="abap_form_documentation.md",
-                            mime="text/markdown",
-                            use_container_width=True
-                        )
-                    with col2:
-                        st.download_button(
-                            label="📥 Télécharger en TXT",
-                            data=final_doc,
-                            file_name="abap_form_documentation.txt",
-                            mime="text/plain",
-                            use_container_width=True
-                        )
-
-                    st.divider()
                     
                     # Display documentation with expanders
                     st.subheader("📋 Contenu de la documentation")
@@ -1017,17 +1077,34 @@ RÈGLES STRICTES À RESPECTER:
 
                     st.session_state.messages.append({"role": "assistant", "content": full_response})
     else:
-        # Empty state with helpful info
-        st.divider()
-        st.markdown("""
-        <div style='text-align: center; padding: 4rem 2rem; background-color: #FFFFFF; border-radius: 1rem; margin: 2rem 0;'>
-            <h2 style='color: #0F4C81; margin-bottom: 1rem;'>👋 Bienvenue !</h2>
-            <p style='font-size: 1.1rem; color: #64748B;'>Téléchargez un fichier ABAP pour commencer</p>
-            <div style='margin-top: 2rem; color: #94A3B8; font-size: 0.9rem;'>
-                <p>Formats supportés : <strong>.abap</strong>, <strong>.txt</strong>, <strong>.pdf</strong></p>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+        # Empty state welcome page with helpful info
+        logo_base64_src = f"data:image/png;base64,{logo_base64}" if logo_base64 else ""
+        logo_html = (f'<div class="welcome-logo"><img src="{logo_base64_src}" width="80" height="80" style="display:block;"/></div>'
+                     if logo_base64_src else '<div class="welcome-logo" style="width:80px;height:80px;display:flex;align-items:center;justify-content:center;font-size:40px;">🧑‍💻</div>')
+
+        icon_code = ui_components.ICONS['code']
+        icon_search = ui_components.ICONS['search']
+        icon_doc = ui_components.ICONS['doc']
+        icon_chat = ui_components.ICONS['chat']
+
+        welcome_html = (
+            '<div class="welcome-container">'
+            + logo_html
+            + '<h1 class="welcome-title">ABAP Doc Generator</h1>'
+            + '<p class="welcome-subtitle">Analysez vos programmes SAP ABAP et g&eacute;n&eacute;rez une documentation technique enrichie par RAG et IA.</p>'
+            + '<div class="features-grid">'
+            + '<div class="feature-box"><div class="feature-icon-wrapper">' + icon_code + '</div><div><div class="feature-title">Analyse Statique</div><div class="feature-desc">Extraction automatique des FORMs, PERFORM, SELECT et modules de fonction.</div></div></div>'
+            + '<div class="feature-box"><div class="feature-icon-wrapper">' + icon_search + '</div><div><div class="feature-title">Base de Connaissances</div><div class="feature-desc">Recherche s&eacute;mantique via ChromaDB avec la base SAP standard.</div></div></div>'
+            + '<div class="feature-box"><div class="feature-icon-wrapper">' + icon_doc + '</div><div><div class="feature-title">G&eacute;n&eacute;ration Automatique</div><div class="feature-desc">Cr&eacute;ation de rapports d&eacute;taill&eacute;s, pr&eacute;cis et r&eacute;dig&eacute;s en fran&ccedil;ais par un mod&egrave;le IA.</div></div></div>'
+            + '<div class="feature-box"><div class="feature-icon-wrapper">' + icon_chat + '</div><div><div class="feature-title">Chatbot Technique</div><div class="feature-desc">Discutez en direct avec l\'assistant IA sur le code analys&eacute;.</div></div></div>'
+            + '</div>'
+            + '<div style="background-color:#F8FAFC;border:1px solid #EEF2F6;border-radius:12px;padding:1rem;display:inline-block;margin-top:1rem;">'
+            + '<p style="margin:0;font-size:0.9rem;color:#64748B;">&#128161; <strong>Commencer&nbsp;:</strong> Glissez-d&eacute;posez ou t&eacute;l&eacute;chargez votre fichier ABAP ci-dessus.</p>'
+            + '<p style="margin:0.25rem 0 0 0;font-size:0.8rem;color:#94A3B8;">Formats accept&eacute;s&nbsp;: .abap, .txt, .pdf</p>'
+            + '</div>'
+            + '</div>'
+        )
+        st.markdown(welcome_html, unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
