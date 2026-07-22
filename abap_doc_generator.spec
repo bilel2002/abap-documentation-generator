@@ -14,7 +14,7 @@ import sys ; sys.setrecursionlimit(sys.getrecursionlimit() * 10)
 
 import os
 import re
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
+from PyInstaller.utils.hooks import collect_all, collect_data_files, collect_submodules, copy_metadata
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.abspath(SPEC))
@@ -54,6 +54,13 @@ datas = [
     # importlib_metadata not needed — Python 3.10+ has importlib.metadata built-in
 ]
 
+# ── ChromaDB — collect everything (Python + data + Rust binaries) ──────────
+# chromadb.api.rust is a compiled Rust extension (.pyd on Windows).
+# collect_submodules() only finds Python modules — it misses .pyd binaries.
+# collect_all() captures modules + data files + compiled binaries in one call.
+_chroma_datas, _chroma_binaries, _chroma_imports = collect_all("chromadb")
+datas += _chroma_datas
+
 
 # ── Hidden imports ────────────────────────────────────────────────────────────
 # Listed explicitly — NO collect_submodules() for heavy ML packages.
@@ -78,12 +85,9 @@ hidden_imports = [
     "streamlit.components.v1",
     "streamlit.elements",
 
-    # ── ChromaDB — use collect_submodules to catch ALL dynamic imports ────
-    # chromadb.config uses importlib.import_module() to load backends at
-    # runtime (telemetry, segment managers, vector stores, etc.).
-    # Manually listing them leads to constant breakage as new submodules are
-    # added. collect_submodules is safe here — chromadb is small (~50 modules).
-    *collect_submodules("chromadb"),
+    # ── ChromaDB — all submodules captured via collect_all() above ─────────
+    # Rust binary extension (.pyd) is handled via _chroma_binaries in Analysis.
+    *_chroma_imports,
 
 
     # ── Sentence Transformers (explicit subset — no collect_submodules) ────
@@ -148,7 +152,7 @@ hidden_imports = [
 a = Analysis(
     [os.path.join(ROOT, "run_app.py")],
     pathex=[ROOT],
-    binaries=[],
+    binaries=_chroma_binaries,
     datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],
