@@ -13,6 +13,7 @@
 import sys ; sys.setrecursionlimit(sys.getrecursionlimit() * 10)
 
 import os
+import re
 from PyInstaller.utils.hooks import collect_data_files, copy_metadata
 
 # ── Paths ────────────────────────────────────────────────────────────────────
@@ -51,6 +52,16 @@ datas = [
     *copy_metadata("click"),
     *copy_metadata("packaging"),
     # importlib_metadata not needed — Python 3.10+ has importlib.metadata built-in
+]
+
+# ── Fix: Windows MAX_PATH (260 chars) exceeded by torch's deeply nested
+# ── license files inside third_party/kineto/libkineto/...
+# ── Strip any datas whose source path is inside a torch dist-info directory.
+_MAX_PATH = 240  # stay safely under the 260 Windows limit
+datas = [
+    (src, dst) for src, dst in datas
+    if not re.search(r'torch[^/\\]*\.dist-info', src, re.IGNORECASE)
+    and len(src) <= _MAX_PATH
 ]
 
 # ── Hidden imports ────────────────────────────────────────────────────────────
@@ -93,7 +104,7 @@ hidden_imports = [
     "chromadb.execution.executor",
     "chromadb.execution.executor.local",
     "chromadb.quota",
-    "chromadb.rate_limiting",
+    # chromadb.rate_limiting removed — no longer exists in current chromadb versions
     "chromadb.segment",
     "chromadb.segment.impl",
     "chromadb.segment.impl.manager",
@@ -107,9 +118,8 @@ hidden_imports = [
 
     # ── Sentence Transformers (explicit subset — no collect_submodules) ────
     "sentence_transformers",
-    "sentence_transformers.models",
-    "sentence_transformers.losses",
-    "sentence_transformers.evaluation",
+    # sentence_transformers.models / .losses / .evaluation removed —
+    # these submodule paths no longer exist as importable modules in newer versions
     "sentence_transformers.util",
     "sentence_transformers.cross_encoder",
 
@@ -117,8 +127,9 @@ hidden_imports = [
     # collect_submodules("transformers") = 500+ modules = stack overflow
     "transformers",
     "transformers.modeling_utils",
-    "transformers.tokenization_utils",
-    "transformers.tokenization_utils_fast",
+    # tokenization_utils / tokenization_utils_fast removed — merged into
+    # transformers.tokenization_utils_base in recent versions
+    "transformers.tokenization_utils_base",
     "transformers.configuration_utils",
     "transformers.models",
     "transformers.models.auto",
@@ -126,7 +137,6 @@ hidden_imports = [
     "transformers.models.roberta",
     "transformers.models.distilbert",
     "transformers.pipelines",
-    "transformers.file_utils",
     "transformers.utils",
 
     # ── PyTorch ───────────────────────────────────────────────────────────
@@ -157,7 +167,8 @@ hidden_imports = [
     # ── Standard library extras ───────────────────────────────────────────
     "email.mime.multipart",
     "email.mime.text",
-    "pkg_resources",
+    # pkg_resources removed — not available as a hidden import in Python 3.12+
+    # (use importlib.metadata instead)
     "importlib.metadata",
     "importlib.resources",
     "sqlite3",

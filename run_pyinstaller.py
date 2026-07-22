@@ -23,14 +23,24 @@ import os
 STACK_SIZE_MB = 64
 SPEC_FILE = "abap_doc_generator.spec"
 
+# Shared result — thread writes exit code here so main thread can read it
+_exit_code = 0
 
 def run_pyinstaller():
-    import PyInstaller.__main__
-    PyInstaller.__main__.run([
-        SPEC_FILE,
-        "--clean",
-        "--noconfirm",
-    ])
+    global _exit_code
+    try:
+        import PyInstaller.__main__
+        PyInstaller.__main__.run([
+            SPEC_FILE,
+            "--clean",
+            "--noconfirm",
+        ])
+        _exit_code = 0
+    except SystemExit as e:
+        _exit_code = e.code if isinstance(e.code, int) else 1
+    except Exception as e:
+        print(f"[ERROR] PyInstaller raised an exception: {e}", file=sys.stderr)
+        _exit_code = 1
 
 
 if __name__ == "__main__":
@@ -41,5 +51,5 @@ if __name__ == "__main__":
     t.start()
     t.join()
 
-    # Exit with same code as PyInstaller (0 = success)
-    sys.exit(0)
+    # Exit with PyInstaller's actual exit code — build.bat checks %ERRORLEVEL%
+    sys.exit(_exit_code)
