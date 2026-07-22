@@ -54,15 +54,6 @@ datas = [
     # importlib_metadata not needed — Python 3.10+ has importlib.metadata built-in
 ]
 
-# ── Fix: Windows MAX_PATH (260 chars) exceeded by torch's deeply nested
-# ── license files inside third_party/kineto/libkineto/...
-# ── Strip any datas whose source path is inside a torch dist-info directory.
-_MAX_PATH = 240  # stay safely under the 260 Windows limit
-datas = [
-    (src, dst) for src, dst in datas
-    if not re.search(r'torch[^/\\]*\.dist-info', src, re.IGNORECASE)
-    and len(src) <= _MAX_PATH
-]
 
 # ── Hidden imports ────────────────────────────────────────────────────────────
 # Listed explicitly — NO collect_submodules() for heavy ML packages.
@@ -205,6 +196,18 @@ a = Analysis(
     cipher=None,
     noarchive=False,
 )
+
+# ── Fix: [WinError 206] filename too long ─────────────────────────────────────
+# PyInstaller's built-in hook-torch.py collects torch's entire dist-info tree,
+# which includes license files nested 15+ directories deep inside third_party/.
+# On Windows, these paths exceed MAX_PATH (260 chars) and crash COLLECT.
+# We filter a.datas HERE — after Analysis — because this is the only point
+# where hook-collected entries are visible. The TOC format is (dest, src, type).
+a.datas = [
+    (dest, src, typ)
+    for dest, src, typ in a.datas
+    if not re.search(r'torch[^/\\]*\.dist-info', dest, re.IGNORECASE)
+]
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=None)
 
