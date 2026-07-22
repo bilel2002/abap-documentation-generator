@@ -14,7 +14,7 @@ import sys ; sys.setrecursionlimit(sys.getrecursionlimit() * 10)
 
 import os
 import re
-from PyInstaller.utils.hooks import collect_data_files, copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 # ── Paths ────────────────────────────────────────────────────────────────────
 ROOT = os.path.dirname(os.path.abspath(SPEC))
@@ -78,41 +78,12 @@ hidden_imports = [
     "streamlit.components.v1",
     "streamlit.elements",
 
-    # ── ChromaDB — client/embedded mode only (no server/fastapi) ──────────
-    "chromadb",
-    "chromadb.api",
-    "chromadb.api.client",
-    "chromadb.api.models",
-    "chromadb.api.segment",
-    "chromadb.api.shared_system_client",
-    "chromadb.api.types",
-    "chromadb.config",
-    "chromadb.db",
-    "chromadb.db.impl",
-    "chromadb.db.impl.sqlite",
-    "chromadb.db.mixins",
-    "chromadb.errors",
-    "chromadb.execution",
-    "chromadb.execution.executor",
-    "chromadb.execution.executor.local",
-    "chromadb.quota",
-    # chromadb.rate_limiting removed — no longer exists in current chromadb versions
-    "chromadb.segment",
-    "chromadb.segment.impl",
-    "chromadb.segment.impl.manager",
-    "chromadb.segment.impl.manager.local",
-    "chromadb.segment.impl.metadata",
-    "chromadb.segment.impl.metadata.sqlite",
-    "chromadb.segment.impl.vector",
-    "chromadb.segment.impl.vector.local_hnsw",
-    "chromadb.telemetry",
-    "chromadb.telemetry.product",
-    "chromadb.telemetry.product.events",
-    # posthog is loaded via importlib.import_module() at runtime — must be explicit
-    "chromadb.telemetry.product.posthog",
-    "chromadb.types",
-    "chromadb.utils",
-    "chromadb.utils.embedding_functions",
+    # ── ChromaDB — use collect_submodules to catch ALL dynamic imports ────
+    # chromadb.config uses importlib.import_module() to load backends at
+    # runtime (telemetry, segment managers, vector stores, etc.).
+    # Manually listing them leads to constant breakage as new submodules are
+    # added. collect_submodules is safe here — chromadb is small (~50 modules).
+    *collect_submodules("chromadb"),
 
 
     # ── Sentence Transformers (explicit subset — no collect_submodules) ────
