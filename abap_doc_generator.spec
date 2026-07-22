@@ -84,6 +84,7 @@ hidden_imports = [
     "chromadb.api.client",
     "chromadb.api.models",
     "chromadb.api.segment",
+    "chromadb.api.shared_system_client",
     "chromadb.api.types",
     "chromadb.config",
     "chromadb.db",
@@ -99,13 +100,20 @@ hidden_imports = [
     "chromadb.segment",
     "chromadb.segment.impl",
     "chromadb.segment.impl.manager",
+    "chromadb.segment.impl.manager.local",
     "chromadb.segment.impl.metadata",
+    "chromadb.segment.impl.metadata.sqlite",
     "chromadb.segment.impl.vector",
+    "chromadb.segment.impl.vector.local_hnsw",
     "chromadb.telemetry",
     "chromadb.telemetry.product",
     "chromadb.telemetry.product.events",
+    # posthog is loaded via importlib.import_module() at runtime — must be explicit
+    "chromadb.telemetry.product.posthog",
     "chromadb.types",
     "chromadb.utils",
+    "chromadb.utils.embedding_functions",
+
 
     # ── Sentence Transformers (explicit subset — no collect_submodules) ────
     "sentence_transformers",
