@@ -50,7 +50,7 @@ datas = [
     *copy_metadata("altair"),
     *copy_metadata("click"),
     *copy_metadata("packaging"),
-    *copy_metadata("importlib_metadata"),
+    # importlib_metadata not needed — Python 3.10+ has importlib.metadata built-in
 ]
 
 # ── Hidden imports ────────────────────────────────────────────────────────────
