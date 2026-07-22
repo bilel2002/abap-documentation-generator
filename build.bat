@@ -7,6 +7,19 @@ echo   ABAP Documentation Generator ^— Build Script
 echo ============================================================
 echo.
 
+:: ── Step 0: Create virtual environment if missing ───────────────────────────
+if not exist .venv (
+    echo [SETUP] .venv not found — creating virtual environment...
+    python -m venv .venv
+    if %ERRORLEVEL% neq 0 (
+        echo [ERROR] Failed to create virtual environment.
+        echo         Make sure Python is installed and added to PATH.
+        pause
+        exit /b 1
+    )
+    echo       .venv created OK
+)
+
 :: ── Step 1: Activate virtual environment ────────────────────────────────────
 echo [1/5] Activating virtual environment...
 call .venv\Scripts\activate.bat
@@ -17,8 +30,21 @@ if %ERRORLEVEL% neq 0 (
 )
 echo       OK
 
-:: ── Step 2: Install build tools ─────────────────────────────────────────────
-echo [2/5] Installing PyInstaller and Pillow (if needed)...
+:: ── Step 2: Install dependencies ────────────────────────────────────────────
+echo [2/5] Installing dependencies from requirements.txt...
+if exist requirements.txt (
+    pip install -r requirements.txt --quiet
+    if %ERRORLEVEL% neq 0 (
+        echo [ERROR] Failed to install requirements.txt.
+        pause
+        exit /b 1
+    )
+    echo       requirements.txt installed OK
+) else (
+    echo       [WARN] requirements.txt not found — skipping
+)
+
+echo       Installing PyInstaller and Pillow (build tools)...
 pip install pyinstaller pillow --quiet
 if %ERRORLEVEL% neq 0 (
     echo [ERROR] pip install failed.
@@ -26,6 +52,7 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 echo       OK
+
 
 :: ── Step 3: Convert logo.png -> icon.ico ────────────────────────────────────
 echo [3/5] Converting logo.png to icon.ico...
