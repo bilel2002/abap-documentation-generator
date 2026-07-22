@@ -292,13 +292,30 @@ RÈGLES STRICTES à respecter:
                 "num_predict": 3000,
                 "num_ctx": 8192
             }
-        )
         return response.get("response", "No documentation generated")
     except Exception as e:
         return f"Error: {str(e)}"
 
+def check_ollama_status(model_name="mistral:7b-instruct"):
+    """Check if Ollama is running and if the requested model is pulled."""
+    try:
+        import requests
+        resp = requests.get("http://localhost:11434/api/tags", timeout=5)
+        if resp.status_code != 200:
+            return False, "Ollama n'est pas accessible sur http://localhost:11434."
+        data = resp.json()
+        models = [m.get("name", "") for m in data.get("models", [])]
+        base_model = model_name.split(":")[0]
+        model_found = any(m == model_name or m.startswith(base_model) for m in models)
+        if not model_found:
+            available_str = ", ".join(models) if models else "aucun modèle"
+            return False, f"Le modèle '{model_name}' n'est pas téléchargé dans Ollama (disponibles : {available_str}). Lancez 'ollama pull {model_name}'."
+        return True, "OK"
+    except Exception as e:
+        return False, f"Ollama n'est pas lancé sur http://localhost:11434. Lancez 'ollama serve'. ({str(e)})"
 
-def generate_program_documentation(full_abap_code, enriched_data, rag_context=None, timeout_seconds=180, model_name="mistral:7b-instruct", temperature=0.1):
+
+def generate_program_documentation(full_abap_code, enriched_data, rag_context=None, timeout_seconds=240, model_name="mistral:7b-instruct", temperature=0.1):
     """Generate documentation for the entire ABAP program."""
     # Build system prompt (in French)
     system_prompt = """Vous êtes un spécialiste senior de la documentation technique SAP ABAP avec 15 ans d'expérience dans la documentation des systèmes SAP d'entreprise.
@@ -323,6 +340,13 @@ RÈGLES STRICTES à respecter:
 - Lorsque vous documentez un module de fonction standard SAP (non-Z), expliquez brièvement ce qu'il fait dans SAP
 - Lorsque vous documentez une fonction Z personnalisée, ne documentez que ce que le code reveals
 """
+    # Truncate full code to avoid crushing Ollama context/memory on CPU
+    MAX_CODE_LEN = 8000
+    if len(full_abap_code) > MAX_CODE_LEN:
+        code_to_send = full_abap_code[:MAX_CODE_LEN] + f"\n\n... [Code tronqué à {MAX_CODE_LEN} caractères pour le résumé global]"
+    else:
+        code_to_send = full_abap_code
+
     # Build main prompt parts (in French)
     prompt_parts = [
         "Vous êtes un développeur ABAP expert et un spécialiste de la documentation technique.",
@@ -358,7 +382,7 @@ RÈGLES STRICTES à respecter:
         "",
         "## CODE SOURCE ABAP COMPLET:",
         "```abap",
-        full_abap_code,
+        code_to_send,
         "```",
         "",
         "Veuillez créer une documentation structurée pour LE PROGRAMME ENTIER avec:",
@@ -380,13 +404,14 @@ RÈGLES STRICTES à respecter:
             stream=False,
             options={
                 "temperature": temperature,
-                "num_predict": 3000,
+                "num_predict": 2500,
                 "num_ctx": 8192
             }
         )
         return response.get("response", "No program documentation generated")
     except Exception as e:
         return f"Error generating program doc: {str(e)}"
+
 
 
 def assemble_documentation(program_doc, all_docs):
@@ -638,6 +663,13 @@ def main():
             st.header("Génération de la documentation")
             
             if st.button("🚀 Générer la documentation", type="primary", use_container_width=True):
+                # Pre-flight check: ensure Ollama is active and required model is installed
+                is_ok, err_msg = check_ollama_status(MODEL_NAME)
+                if not is_ok:
+                    st.error(f"❌ {err_msg}", icon="🚨")
+                    st.info("💡 **Instructions pour configurer Ollama :**\n- Démarrez Ollama dans votre terminal avec `ollama serve`\n- Téléchargez le modèle en exécutant `ollama pull mistral:7b-instruct` dans l'invite de commande.")
+                    st.stop()
+
                 try:
                     # Placeholder for download buttons at the top of content
                     download_buttons_placeholder = st.empty()
@@ -734,23 +766,28 @@ def main():
                         program_rag_context = "\n".join(program_rag_parts) if program_rag_parts else ""
                         
                         program_doc = generate_program_documentation(
-                cleaned_text, 
-                enriched_data, 
-                rag_context=program_rag_context,
-                timeout_seconds=240,
-                model_name=MODEL_NAME,
-            )
-                        st.session_state.program_doc_done = True
-                        status.update(label="✅ Documentation programme générée", state="complete", expanded=False)
-                        
-                        # Update sidebar to mark program doc as done
-                        with st.sidebar:
-                            program_placeholder.success("✅ Documentation du programme terminée")
+                            cleaned_text, 
+                            enriched_data, 
+                            rag_context=program_rag_context,
+                            timeout_seconds=240,
+                            model_name=MODEL_NAME,
+                        )
+                        if program_doc.startswith("Error"):
+                            st.session_state.program_doc_done = False
+                            status.update(label=f"⚠️ Étape 4 : {program_doc}", state="error", expanded=True)
+                            with st.sidebar:
+                                program_placeholder.error("❌ Erreur documentation programme")
+                        else:
+                            st.session_state.program_doc_done = True
+                            status.update(label="✅ Documentation programme générée", state="complete", expanded=False)
+                            with st.sidebar:
+                                program_placeholder.success("✅ Documentation du programme terminée")
                         
                         # Display program doc immediately
                         with program_display.container():
                             st.subheader("📄 Documentation du programme principal")
                             st.markdown(program_doc)
+
 
                     # Step 5: Generate form docs
                     with st.status("🔄 Étape 5/6 - Génération documentation forms...", expanded=True) as status:
